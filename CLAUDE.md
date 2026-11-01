@@ -6,7 +6,7 @@ recordr is a Loopback-style virtual audio device app for macOS (14.2+), in Rust.
 
 All repo content (code, comments, docs, commit messages, PR descriptions) is in English, even when the conversation isn't.
 
-Developer docs go in this file; user-facing docs (install, usage, permissions, limits) go in `README.md`. Keep each where it belongs when updating. `docs/` is the GitHub Pages site (a single static `index.html`, served from `main` → `/docs`); it repeats the README's usage guide, so update both together.
+Developer docs go in this file; user-facing docs (install, usage, permissions, limits) go in `README.md`. Keep each where it belongs when updating. `docs/` is the GitHub Pages site (a single static `index.html`, served from `main` → `/docs`); it repeats the README's usage guide, so update both together. Any user-visible change (UI, CLI, install, permissions) must update the site in the same PR.
 
 ## Commands
 
