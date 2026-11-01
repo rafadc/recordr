@@ -22,6 +22,7 @@ struct App {
     login_registered: bool,
     settings_open: bool,
     show_continuity: bool, // setting: list iPhone (Continuity) mics as inputs
+    dark: bool,            // setting: Dark vs Bright theme
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -42,6 +43,45 @@ const KEY: &str = "devices";
 const RUNNING: &str = "running";
 const LOGIN: &str = "login_item_registered";
 const SHOW_CONTINUITY: &str = "show_continuity";
+const DARK: &str = "dark";
+
+// Palette shared with the website (docs/index.html).
+const GRAPHITE: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+const CORAL: egui::Color32 = egui::Color32::from_rgb(0xEE, 0x76, 0x72);
+const TANGERINE: egui::Color32 = egui::Color32::from_rgb(0xF7, 0xA2, 0x6F);
+const CINNABAR: egui::Color32 = egui::Color32::from_rgb(0xE9, 0x54, 0x50);
+
+/// Bright and Dark visuals in the site's palette; `ctx.set_theme` switches between them.
+fn install_theme(ctx: &egui::Context) {
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let dark = theme == egui::Theme::Dark;
+        let mut v = theme.default_visuals();
+        let (bg, card, field) = if dark {
+            (
+                egui::Color32::from_rgb(0x26, 0x26, 0x26),
+                GRAPHITE,
+                egui::Color32::from_rgb(0x1C, 0x1C, 0x1C),
+            )
+        } else {
+            (
+                egui::Color32::from_rgb(0xFC, 0xFA, 0xF8),
+                egui::Color32::from_rgb(0xF4, 0xEC, 0xE6),
+                egui::Color32::WHITE,
+            )
+        };
+        v.panel_fill = bg;
+        v.window_fill = bg;
+        v.faint_bg_color = card;
+        v.extreme_bg_color = field;
+        v.selection.bg_fill = CORAL;
+        v.selection.stroke.color = egui::Color32::WHITE;
+        v.hyperlink_color = CINNABAR;
+        v.widgets.hovered.weak_bg_fill = TANGERINE.gamma_multiply(0.35);
+        v.widgets.hovered.bg_stroke.color = CORAL;
+        v.widgets.active.weak_bg_fill = TANGERINE;
+        ctx.set_visuals_of(theme, v);
+    }
+}
 
 pub fn run() -> Result<(), String> {
     let opts = eframe::NativeOptions {
@@ -77,6 +117,12 @@ pub fn run() -> Result<(), String> {
             .storage
             .and_then(|s| eframe::get_value(s, SHOW_CONTINUITY))
             .unwrap_or(false);
+        app.dark = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, DARK))
+            .unwrap_or(cc.egui_ctx.system_theme() != Some(egui::Theme::Light));
+        install_theme(&cc.egui_ctx);
+        cc.egui_ctx.set_theme(theme(app.dark));
         if app.devices.is_empty() {
             app.add_device();
         }
@@ -222,6 +268,7 @@ impl eframe::App for App {
         eframe::set_value(storage, RUNNING, &running);
         eframe::set_value(storage, LOGIN, &self.login_registered);
         eframe::set_value(storage, SHOW_CONTINUITY, &self.show_continuity);
+        eframe::set_value(storage, DARK, &self.dark);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -269,6 +316,15 @@ impl eframe::App for App {
                 if changed {
                     self.refresh(&ui.ctx().clone());
                 }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Appearance");
+                    let a = ui.selectable_value(&mut self.dark, false, "☀ Bright");
+                    let b = ui.selectable_value(&mut self.dark, true, "☾ Dark");
+                    if a.changed() || b.changed() {
+                        ui.ctx().set_theme(theme(self.dark));
+                    }
+                });
             });
             return;
         }
@@ -289,7 +345,11 @@ impl eframe::App for App {
                     egui::TextEdit::singleline(&mut d.args.name).desired_width(220.0),
                 );
                 let label = if live { "■ Stop" } else { "▶ Start" };
-                if ui.button(label).clicked() {
+                let fill = if live { CINNABAR } else { CORAL };
+                let button =
+                    egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
+                        .fill(fill);
+                if ui.add(button).clicked() {
                     *error = None;
                     if live {
                         d.live = None; // Drop removes the device
@@ -479,7 +539,7 @@ fn app_tile(ui: &mut egui::Ui, list: &mut Vec<String>, a: &AppEntry, levels: Opt
     }
 }
 
-/// Two thin L/R bars along the tile's bottom edge: green, then yellow, red near 0 dB.
+/// Two thin L/R bars along the tile's bottom edge: tangerine, then coral, cinnabar near 0 dB.
 fn meter_bars(painter: &egui::Painter, tile: egui::Rect, levels: [f32; 2], track: egui::Color32) {
     for (i, level) in levels.into_iter().enumerate() {
         let y = tile.bottom() - 14.0 + i as f32 * 6.0;
@@ -489,9 +549,9 @@ fn meter_bars(painter: &egui::Painter, tile: egui::Rect, levels: [f32; 2], track
         );
         painter.rect_filled(bar, 2.0, track.gamma_multiply(0.15));
         let color = match level {
-            l if l > 0.95 => egui::Color32::from_rgb(235, 70, 60),
-            l if l > 0.8 => egui::Color32::from_rgb(240, 200, 50),
-            _ => egui::Color32::from_rgb(70, 200, 100),
+            l if l > 0.95 => CINNABAR,
+            l if l > 0.8 => CORAL,
+            _ => TANGERINE,
         };
         let mut lit = bar;
         lit.set_width(bar.width() * level);
@@ -611,4 +671,12 @@ fn icon_image(image: &objc2_app_kit::NSImage, px: usize) -> Option<egui::ColorIm
     }
     let bytes = unsafe { std::slice::from_raw_parts(data, px * px * 4) };
     Some(egui::ColorImage::from_rgba_premultiplied([px, px], bytes))
+}
+
+fn theme(dark: bool) -> egui::Theme {
+    if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    }
 }
