@@ -18,8 +18,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSColor, NSEventMask, NSEventModifierFlags,
-    NSEventType, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength,
+    NSEventType, NSImage, NSImageSymbolConfiguration, NSMenu, NSMenuItem, NSStatusBar,
+    NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::NSString;
 
@@ -152,19 +152,32 @@ impl Tray {
         let Some(button) = self.item.button(mtm) else {
             return;
         };
-        let (symbol, label) = if on {
-            ("record.circle.fill", "recordr: recording")
-        } else {
-            ("waveform", "recordr")
-        };
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str(symbol),
-            Some(&NSString::from_str(label)),
-        );
+        let image = icon(on);
         button.setImage(image.as_deref());
-        let red = NSColor::systemRedColor();
-        button.setContentTintColor(on.then_some(&*red));
     }
+}
+
+/// Waveform (template, follows the menu bar's color), or a red record dot.
+pub(crate) fn icon(on: bool) -> Option<Retained<NSImage>> {
+    let (symbol, label) = if on {
+        ("record.circle.fill", "recordr: recording")
+    } else {
+        ("waveform", "recordr")
+    };
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(symbol),
+        Some(&NSString::from_str(label)),
+    )?;
+    if !on {
+        return Some(image);
+    }
+    // The menu bar draws template images monochrome and ignores contentTintColor,
+    // so bake the red into the symbol and opt out of templating.
+    let red =
+        NSImageSymbolConfiguration::configurationWithHierarchicalColor(&NSColor::systemRedColor());
+    let image = image.imageWithSymbolConfiguration(&red).unwrap_or(image);
+    image.setTemplate(false);
+    Some(image)
 }
 
 impl Drop for Tray {
