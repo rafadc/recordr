@@ -47,7 +47,7 @@ Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writ
   - The audio thread writes peaks into `AtomicU32` f32 bits, and the GUI reads them with `levels()`.
   - It assumes Float32 samples.
 - **`src/gui.rs`**: the eframe/egui window.
-  - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`.
+  - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`, `dark`. Colors are the site palette (`GRAPHITE`/`CORAL`/`TANGERINE`/`CINNABAR` in `gui.rs`, mirrored in `docs/index.html`).
   - On launch:
     - Devices that were running at quit restart.
     - The app registers itself as a login item once through `SMAppService`, only when running from a `.app`.
