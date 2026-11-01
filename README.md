@@ -4,6 +4,18 @@ recordr creates virtual audio inputs on your Mac. It routes sound from your apps
 
 ## Install
 
+Download the latest nightly build: [recordr.dmg](https://github.com/rafadc/recordr/releases/download/nightly/recordr.dmg) (Apple Silicon). Open it and drag recordr into Applications.
+
+recordr isn't notarized, so macOS blocks it the first time you open it. Go to System Settings → Privacy & Security and click **Open Anyway**. Or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/recordr.app
+```
+
+Each nightly build has a new signature, so macOS asks for the permissions again after an update.
+
+To build it from source instead (Rust needed):
+
 ```sh
 ./bundle.sh
 cp -R target/recordr.app /Applications/
@@ -56,4 +68,4 @@ The device exists until you press Ctrl-C.
 - An app only appears once it has played sound. An app launched after you start a device isn't captured until you stop and start the device again.
 - Input devices are added as extra channels. They aren't mixed into the stereo pair.
 - There's no per-source volume and no channel mapping.
-- The app only works on the Mac where it was built, because it isn't notarized.
+- It isn't notarized, so macOS asks you to allow it the first time (see Install). Builds are Apple Silicon only.
