@@ -66,4 +66,4 @@ Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writ
 
 ## Workflow
 
-Work on a branch, then fast-forward `main` (`git push origin HEAD:main`); there are no merge commits.
+Work on a branch and open a pull request against `main` (`gh pr create`); don't push to `main` directly. The PR description must explain **why** the change is made (the problem or motivation), not just what changed.
