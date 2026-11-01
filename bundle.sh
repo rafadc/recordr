@@ -7,6 +7,9 @@ app=target/recordr.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp Info.plist "$app/Contents/"
+mkdir -p "$app/Contents/Resources"
+# Icon source is assets/icon.svg; regenerate the .icns with assets/make-icon.sh.
+cp assets/AppIcon.icns "$app/Contents/Resources/"
 cp target/release/recordr "$app/Contents/MacOS/"
 # Ad-hoc signature: enough for macOS to remember the Audio Capture permission locally.
 # ponytail: sharing with other Macs needs a Developer ID signature + notarization.

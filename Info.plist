@@ -6,6 +6,8 @@
 	<string>dev.recordr</string>
 	<key>CFBundleName</key>
 	<string>recordr</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>recordr</string>
 	<key>CFBundlePackageType</key>
