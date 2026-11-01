@@ -1,0 +1,22 @@
+# Every push to main rebuilds the "nightly" GitHub release with a fresh recordr.dmg.
+name: nightly
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+jobs:
+  release:
+    runs-on: macos-latest # ponytail: Apple Silicon only; add an x86_64 target + lipo if Intel Macs matter
+    steps:
+      - uses: actions/checkout@v4
+      - run: RECORDR_SIGN=- ./bundle.sh --dmg
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly target/recordr.dmg --prerelease --title "Nightly" --target "$GITHUB_SHA" \
+            --notes "Latest build of main ($GITHUB_SHA). Apple Silicon, not notarized: see the README to open it."
