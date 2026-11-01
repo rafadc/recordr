@@ -2,14 +2,30 @@
 // Device configs persist via eframe storage (~/Library/Application Support/recordr);
 // devices that were live at quit restart on launch, and the app registers itself as a login item.
 
-use crate::{Loopback, RunArgs, input_devices, meter::Meter, processes};
+use crate::{
+    Loopback, RunArgs, input_devices,
+    meter::Meter,
+    processes,
+    record::{self, Recorder},
+};
 use eframe::egui;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 struct Device {
     args: RunArgs,
+    rec: Option<Recorder>, // before `live`: fields drop in order, so recording stops first
     live: Option<Loopback>,
+}
+
+impl Device {
+    fn start(&mut self) -> Result<(), String> {
+        if self.args.apps.is_empty() && !self.args.system && self.args.devices.is_empty() {
+            return Err("Pick at least one source.".into());
+        }
+        self.live = Some(Loopback::create(&self.args)?);
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -24,6 +40,7 @@ struct App {
     perms: [Perm; 2],      // re-checked on every refresh
     show_continuity: bool, // setting: list iPhone (Continuity) mics as inputs
     dark: bool,            // setting: Dark vs Bright theme
+    record_dir: String,    // setting: where Record saves WAVs; `~` allowed
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -46,6 +63,7 @@ const RUNNING: &str = "running";
 const LOGIN: &str = "login_item_registered";
 const SHOW_CONTINUITY: &str = "show_continuity";
 const DARK: &str = "dark";
+const RECORD_DIR: &str = "record_dir";
 
 // Palette shared with the website (docs/index.html).
 const GRAPHITE: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
@@ -106,6 +124,7 @@ pub fn run() -> Result<(), String> {
             .map(|(args, run)| Device {
                 // ponytail: a failed restart (e.g. revoked permission) just leaves it stopped.
                 live: run.then(|| Loopback::create(&args).ok()).flatten(),
+                rec: None,
                 args,
             })
             .collect();
@@ -123,6 +142,10 @@ pub fn run() -> Result<(), String> {
             .storage
             .and_then(|s| eframe::get_value(s, DARK))
             .unwrap_or(cc.egui_ctx.system_theme() != Some(egui::Theme::Light));
+        app.record_dir = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, RECORD_DIR))
+            .unwrap_or_else(|| "~/Music/recordr".into());
         install_theme(&cc.egui_ctx);
         cc.egui_ctx.set_theme(theme(app.dark));
         if app.devices.is_empty() {
@@ -266,6 +289,7 @@ impl App {
                 ..Default::default()
             },
             live: None,
+            rec: None,
         });
         self.selected = self.devices.len() - 1;
     }
@@ -280,6 +304,7 @@ impl eframe::App for App {
         eframe::set_value(storage, LOGIN, &self.login_registered);
         eframe::set_value(storage, SHOW_CONTINUITY, &self.show_continuity);
         eframe::set_value(storage, DARK, &self.dark);
+        eframe::set_value(storage, RECORD_DIR, &self.record_dir);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -332,6 +357,18 @@ impl eframe::App for App {
                     }
                 });
                 ui.add_space(16.0);
+                ui.strong("Recordings");
+                ui.horizontal(|ui| {
+                    ui.label("Folder");
+                    ui.text_edit_singleline(&mut self.record_dir);
+                    if ui.link("Show in Finder").clicked() {
+                        let dir = record::file_path(&self.record_dir, "x");
+                        let dir = dir.parent().unwrap_or(&dir);
+                        let _ = std::fs::create_dir_all(dir);
+                        let _ = std::process::Command::new("open").arg(dir).spawn();
+                    }
+                });
+                ui.add_space(16.0);
                 ui.strong("Command line");
                 ui.horizontal(|ui| {
                     if cli_installed() {
@@ -379,12 +416,13 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             let (mut delete, mut refresh) = (false, false);
             let many = self.devices.len() > 1;
-            let (apps, inputs, error, meters, installed) = (
+            let (apps, inputs, error, meters, installed, record_dir) = (
                 &self.apps,
                 &self.inputs,
                 &mut self.error,
                 &self.meters,
                 &self.installed,
+                &self.record_dir,
             );
             let Some(d) = self.devices.get_mut(self.selected) else {
                 return;
@@ -417,13 +455,38 @@ impl eframe::App for App {
                 if ui.add(button).clicked() {
                     *error = None;
                     if live {
+                        d.rec = None;
                         d.live = None; // Drop removes the device
-                    } else if d.args.apps.is_empty() && !d.args.system && d.args.devices.is_empty()
-                    {
-                        *error = Some("Pick at least one source.".into());
+                    } else if let Err(e) = d.start() {
+                        *error = Some(e);
+                    }
+                }
+                let recording = d.rec.is_some();
+                let label = if recording {
+                    "■ Stop recording"
+                } else {
+                    "● Record"
+                };
+                let button =
+                    egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
+                        .fill(if recording { CINNABAR } else { TANGERINE });
+                if ui
+                    .add(button)
+                    .on_hover_text("Save the device's audio as a WAV in the Settings folder.")
+                    .clicked()
+                {
+                    *error = None;
+                    if recording {
+                        d.rec = None; // Drop finalizes the file
                     } else {
-                        match Loopback::create(&d.args) {
-                            Ok(lb) => d.live = Some(lb),
+                        // Record starts the device if needed.
+                        let started = if d.live.is_some() { Ok(()) } else { d.start() };
+                        let rec = started.and_then(|()| {
+                            let dev = d.live.as_ref().map_or(0, |l| l.dev_id);
+                            Recorder::start(dev, record::file_path(record_dir, &d.args.name))
+                        });
+                        match rec {
+                            Ok(r) => d.rec = Some(r),
                             Err(e) => *error = Some(e),
                         }
                     }
@@ -437,6 +500,17 @@ impl eframe::App for App {
             }
             if live {
                 ui.label("Live — select it as an input in any app. Stop to edit.");
+            }
+            if let Some(r) = &d.rec {
+                ui.horizontal(|ui| {
+                    ui.colored_label(CINNABAR, format!("● Recording to {}", r.path.display()));
+                    if ui.link("Show in Finder").clicked() {
+                        let _ = std::process::Command::new("open")
+                            .arg("-R")
+                            .arg(&r.path)
+                            .spawn();
+                    }
+                });
             }
             ui.separator();
 
