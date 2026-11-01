@@ -52,7 +52,13 @@ macOS asks for two permissions the first time recordr needs them:
 
 ## Command line
 
-The app's binary also works from a terminal:
+The app's binary also works from a terminal. Put it on your PATH once:
+
+```sh
+sudo ln -s /Applications/recordr.app/Contents/MacOS/recordr /usr/local/bin/recordr
+```
+
+Then:
 
 ```sh
 recordr list                                              # audio processes, devices and inputs
@@ -61,7 +67,7 @@ recordr run Call --app com.google.Chrome --device BuiltInMicrophoneDevice
 recordr run Everything --system --mute                    # all system audio, silenced on speakers
 ```
 
-The device exists until you press Ctrl-C.
+The device exists until you press Ctrl-C. From a terminal, macOS asks for the permissions on behalf of your terminal app (Terminal, iTerm…), not recordr.
 
 ## Limits
 
