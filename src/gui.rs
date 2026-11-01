@@ -20,9 +20,6 @@ struct Device {
 
 impl Device {
     fn start(&mut self) -> Result<(), String> {
-        if self.args.apps.is_empty() && !self.args.system && self.args.devices.is_empty() {
-            return Err("Pick at least one source.".into());
-        }
         self.live = Some(Loopback::create(&self.args)?);
         Ok(())
     }
@@ -490,6 +487,23 @@ impl eframe::App for App {
                             Err(e) => *error = Some(e),
                         }
                     }
+                }
+                // Closed apps are skipped by Loopback::create; say so.
+                let closed: Vec<String> = d
+                    .args
+                    .apps
+                    .iter()
+                    .filter(|b| !d.args.system && !apps.iter().any(|a| a.bundle == **b))
+                    .map(|b| match installed.get(b) {
+                        Some(Some((name, _))) => name.clone(),
+                        _ => b.clone(),
+                    })
+                    .collect();
+                if !closed.is_empty() {
+                    ui.colored_label(TANGERINE, format!("⚠ Not running: {}", closed.join(", ")))
+                        .on_hover_text(
+                            "These apps won't be captured until they're open and play sound.",
+                        );
                 }
                 if !live && many && ui.button("Delete").clicked() {
                     delete = true;

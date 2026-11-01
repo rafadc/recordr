@@ -268,9 +268,9 @@ fn parse_run(args: &[String]) -> Result<RunArgs, String> {
     Ok(r)
 }
 
-/// Resolve `--app` values to Core Audio process objects.
-/// A bundle-id matches as a prefix so `com.google.Chrome` also picks its helper processes.
-fn resolve_apps(apps: &[String]) -> Result<Vec<AudioObjectID>, String> {
+/// Resolve `--app` values to Core Audio process objects, skipping (with a warning) apps that
+/// aren't running. A bundle-id matches as a prefix so `com.google.Chrome` also picks its helpers.
+fn resolve_apps(apps: &[String]) -> Vec<AudioObjectID> {
     let procs = processes();
     let mut ids = vec![];
     for app in apps {
@@ -288,13 +288,13 @@ fn resolve_apps(apps: &[String]) -> Result<Vec<AudioObjectID>, String> {
         };
         if found.is_empty() {
             // ponytail: app must already have opened audio; watch ProcessObjectList to pick up late launches.
-            return Err(format!(
-                "no audio process matches '{app}' (is it running and has it played sound? see `recordr list`)"
-            ));
+            eprintln!(
+                "skipping '{app}': no audio process (is it running and has it played sound?)"
+            );
         }
         ids.extend(found);
     }
-    Ok(ids)
+    ids
 }
 
 fn run(r: RunArgs) -> Result<(), String> {
@@ -348,11 +348,20 @@ impl Loopback {
         // 1. Tap: one stereo mixdown of all requested apps (or the whole system).
         let mut tap_id: AudioObjectID = 0;
         let mut tap_uid = None;
-        if r.system || !r.apps.is_empty() {
-            let procs: Vec<_> = resolve_apps(&r.apps)?
-                .into_iter()
-                .map(NSNumber::new_u32)
-                .collect();
+        let procs = if r.system {
+            vec![]
+        } else {
+            resolve_apps(&r.apps)
+        };
+        if !r.system && procs.is_empty() && r.devices.is_empty() {
+            return Err(if r.apps.is_empty() {
+                "Pick at least one source.".into()
+            } else {
+                "None of the selected apps is running or has played sound yet.".into()
+            });
+        }
+        if r.system || !procs.is_empty() {
+            let procs: Vec<_> = procs.into_iter().map(NSNumber::new_u32).collect();
             let procs = NSArray::from_retained_slice(&procs);
             let desc = unsafe {
                 let alloc = CATapDescription::alloc();
