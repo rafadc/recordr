@@ -43,7 +43,7 @@ Devices and their sources are saved. Devices that were running when you quit sta
 ### Settings
 
 To open settings, click **⚙ Settings** at the bottom of the sidebar.
-- **Show in**: **Dock and menu bar** (default), **Dock only**, or **Menu bar only**. The menu bar icon is a waveform that turns into a red dot while a device records. Its menu has **Open recordr** and **Quit recordr**. While the menu bar icon is shown, closing the window hides recordr instead of quitting, and your devices keep running.
+- **Show in**: **Dock and menu bar** (default), **Dock only**, or **Menu bar only**. The menu bar icon is a waveform that turns into a red dot while a device records. Click it to show or hide recordr; right-click it for **Open recordr** and **Quit recordr**. While the menu bar icon is shown, closing the window hides recordr instead of quitting, and your devices keep running.
 - **Recordings → Folder**: where **● Record** saves files. The default is `~/Music/recordr`.
 - **Show Continuity sources** (off by default): lists your iPhone's microphone as an input. iPhone and Bluetooth microphones never get a level meter, because opening them wakes the iPhone or switches AirPods to call quality.
 

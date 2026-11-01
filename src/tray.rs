@@ -1,9 +1,14 @@
-//! Menu bar icon (NSStatusItem) with Open / Quit, and the Dock-vs-menu-bar activation policy.
-//! Open unhides the app directly; Quit sets a flag that `App::ui` turns into a normal close.
+//! Menu bar icon (NSStatusItem) and the Dock-vs-menu-bar activation policy.
+//! Left click shows/hides the app; right (or ctrl) click opens the Open / Quit menu.
+//! Showing happens here directly (egui runs no frames while hidden); Quit sets a flag that
+//! `App::handle_window` turns into a normal close.
 
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, Ordering::Relaxed},
+use std::{
+    cell::RefCell,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering::Relaxed},
+    },
 };
 
 use eframe::egui;
@@ -12,13 +17,19 @@ use objc2::{
     runtime::NSObject, sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSColor, NSImage, NSMenu, NSMenuItem,
-    NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSApplicationActivationPolicy, NSColor, NSEventMask, NSEventModifierFlags,
+    NSEventType, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength,
 };
 use objc2_foundation::NSString;
 
 static QUIT: AtomicBool = AtomicBool::new(false);
 static CTX: OnceLock<egui::Context> = OnceLock::new();
+
+thread_local! {
+    // The live status item and its right-click menu, for the click handler.
+    static ITEM: RefCell<Option<(Retained<NSStatusItem>, Retained<NSMenu>)>> = const { RefCell::new(None) };
+}
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -27,6 +38,31 @@ define_class!(
     struct Target;
 
     impl Target {
+        #[unsafe(method(clicked:))]
+        fn clicked(&self, _sender: Option<&AnyObject>) {
+            let app = NSApplication::sharedApplication(self.mtm());
+            let right = app.currentEvent().is_some_and(|e| {
+                e.r#type() == NSEventType::RightMouseUp
+                    || e.modifierFlags().contains(NSEventModifierFlags::Control)
+            });
+            if right {
+                // Attach the menu just for this click, so a left click stays a plain action.
+                ITEM.with_borrow(|i| {
+                    if let Some((item, menu)) = i {
+                        item.setMenu(Some(menu));
+                        if let Some(b) = item.button(self.mtm()) {
+                            unsafe { b.performClick(None) };
+                        }
+                        item.setMenu(None);
+                    }
+                });
+            } else if app.isActive() && !app.isHidden() {
+                hide();
+            } else {
+                show_windows();
+            }
+        }
+
         #[unsafe(method(open:))]
         fn open(&self, _sender: Option<&AnyObject>) {
             // egui doesn't run frames while hidden, so show it from here.
@@ -88,7 +124,14 @@ impl Tray {
             menu.addItem(&item);
         }
         let item = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
-        item.setMenu(Some(&menu));
+        if let Some(b) = item.button(mtm) {
+            unsafe {
+                b.setTarget(Some(&target));
+                b.setAction(Some(sel!(clicked:)));
+            }
+            b.sendActionOn(NSEventMask::LeftMouseUp | NSEventMask::RightMouseUp);
+        }
+        ITEM.set(Some((item.clone(), menu)));
         let mut tray = Tray {
             item,
             _target: target,
@@ -125,6 +168,7 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
+        ITEM.set(None);
         NSStatusBar::systemStatusBar().removeStatusItem(&self.item);
     }
 }
