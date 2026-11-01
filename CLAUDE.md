@@ -46,7 +46,7 @@ Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writ
     2. An aggregate device built from `aggregate_description` that includes the tap plus optional physical inputs. The first input device is the clock.
     3. `Drop` destroys the aggregate and the tap. Devices exist only while recordr runs.
   - The `recordr.<name>` uid prefix marks our own devices. Stale ones from a crash are removed on create, and the GUI filters them out of the inputs.
-- **`src/record.rs`**: the Record button. An IOProc on the live aggregate interleaves all of its channels (tap stereo + inputs) and sends them over an mpsc channel to a writer thread, which writes a Float32 WAV and patches the header sizes on `Drop`.
+- **`src/record.rs`**: the Record button. An IOProc on the live aggregate mixes all its streams to stereo (a mono input goes to both sides) and sends them over an mpsc channel to a writer thread. The thread encodes a 128 kbps MP3 with LAME (`mp3lame-encoder`, LAME is built in, so there's no runtime dependency). Keep it MP3: Speakr's transcription backend rejected our WAVs (`unsupported_format`), both Float32 and 16-bit PCM.
 - **`src/tray.rs`**: the menu bar icon (`NSStatusItem`) and the Dock activation policy (Regular vs Accessory).
   - Left click shows/hides the app. Right or ctrl click attaches the menu just for that click (`setMenu` + `performClick`), then detaches it.
   - The button and menu items target a `define_class!` object. egui runs no frames while the app is hidden, so **Open** unhides the app from Objective-C directly. **Quit** also shows the window, then sets a flag that `App::handle_window` turns into a normal close, so eframe saves state.

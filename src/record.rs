@@ -1,10 +1,12 @@
-//! Record a live device to a Float32 WAV: an IOProc on the aggregate hands interleaved frames
-//! to a writer thread. Dropping the Recorder stops capture and finalizes the file.
+//! Record a live device to a stereo 128 kbps MP3: small, and accepted by every transcription
+//! backend Speakr talks to (they rejected our WAVs). An IOProc on the aggregate mixes all its
+//! streams to stereo and hands the frames to a writer thread that encodes with LAME.
+//! Dropping the Recorder stops capture and flushes the file.
 
 use std::{
     ffi::c_void,
     fs::File,
-    io::{BufWriter, Seek, SeekFrom, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     ptr::NonNull,
     sync::mpsc::{Receiver, Sender, channel},
@@ -20,7 +22,7 @@ pub struct Recorder {
     pub path: PathBuf,
     dev: AudioObjectID,
     proc_id: AudioDeviceIOProcID,
-    tx: Option<Box<Sender<(u16, Vec<f32>)>>>, // boxed for a stable address handed to the IOProc
+    tx: Option<Box<Sender<Vec<f32>>>>, // boxed for a stable address handed to the IOProc
     writer: Option<JoinHandle<()>>,
 }
 
@@ -34,7 +36,7 @@ impl Recorder {
         let (tx, rx) = channel();
         let shown = path.clone();
         let writer = std::thread::spawn(move || {
-            if let Err(e) = write_wav(file, rate as u32, rx) {
+            if let Err(e) = write_mp3(file, rate as u32, rx) {
                 eprintln!("recording {}: {e}", shown.display());
             }
         });
@@ -86,7 +88,7 @@ unsafe extern "C-unwind" fn io_proc(
     _out_time: NonNull<AudioTimeStamp>,
     data: *mut c_void,
 ) -> i32 {
-    let tx = unsafe { &*data.cast::<Sender<(u16, Vec<f32>)>>() };
+    let tx = unsafe { &*data.cast::<Sender<Vec<f32>>>() };
     let list = unsafe { input.as_ref() };
     let bufs =
         unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), list.mNumberBuffers as usize) };
@@ -101,62 +103,67 @@ unsafe extern "C-unwind" fn io_proc(
             (n, s)
         })
         .collect();
-    let channels: usize = streams.iter().map(|(n, _)| n).sum();
-    let frames = streams.iter().map(|(n, s)| s.len() / n).min().unwrap_or(0);
-    let mut out = Vec::with_capacity(frames * channels);
-    for f in 0..frames {
-        for (n, s) in &streams {
-            out.extend_from_slice(&s[f * n..(f + 1) * n]);
-        }
-    }
-    let _ = tx.send((channels as u16, out));
+    let _ = tx.send(mix_stereo(&streams));
     0
 }
 
+/// Interleaved stereo from the aggregate's streams (each `(channels, interleaved samples)`):
+/// a mono stream (a mic) goes to both sides, otherwise channel i goes to side i % 2.
+fn mix_stereo(streams: &[(usize, &[f32])]) -> Vec<f32> {
+    let frames = streams.iter().map(|(n, s)| s.len() / n).min().unwrap_or(0);
+    let mut out = vec![0f32; frames * 2];
+    for (n, s) in streams {
+        for f in 0..frames {
+            for c in 0..*n {
+                let v = s[f * n + c];
+                if *n == 1 {
+                    out[f * 2] += v;
+                    out[f * 2 + 1] += v;
+                } else {
+                    out[f * 2 + c % 2] += v;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Float32 WAV. The channel count comes from the first chunk; sizes are patched at the end.
-fn write_wav(file: File, rate: u32, rx: Receiver<(u16, Vec<f32>)>) -> std::io::Result<()> {
+/// Encode stereo f32 frames to MP3 as they arrive.
+fn write_mp3(file: File, rate: u32, rx: Receiver<Vec<f32>>) -> Result<(), String> {
+    use mp3lame_encoder::{Bitrate, Builder, FlushNoGap, InterleavedPcm, Quality};
+    let err = |e: &dyn std::fmt::Debug| format!("{e:?}");
+    let mut enc = Builder::new()
+        .ok_or("LAME init failed")?
+        .with_num_channels(2)
+        .and_then(|b| b.with_sample_rate(rate))
+        .and_then(|b| b.with_brate(Bitrate::Kbps128))
+        .and_then(|b| b.with_quality(Quality::Good))
+        .and_then(|b| b.with_to_write_vbr_tag(false))
+        .map_err(|e| err(&e))?
+        .build()
+        .map_err(|e| err(&e))?;
     let mut w = BufWriter::new(file);
-    let mut channels = 0u16;
-    for (ch, samples) in rx {
-        if channels == 0 {
-            channels = ch.max(1);
-            header(&mut w, channels, rate, 0)?;
-        }
-        if ch != channels {
-            continue; // ponytail: a stream layout change mid-recording drops those chunks
-        }
-        for s in samples {
-            w.write_all(&s.to_le_bytes())?;
-        }
+    let mut out = Vec::new();
+    for mut samples in rx {
+        // Mixed sources can sum past full scale: clip rather than distort.
+        samples.iter_mut().for_each(|s| *s = s.clamp(-1.0, 1.0));
+        out.clear();
+        out.reserve(mp3lame_encoder::max_required_buffer_size(samples.len() / 2));
+        enc.encode_to_vec(InterleavedPcm(&samples), &mut out)
+            .map_err(|e| err(&e))?;
+        w.write_all(&out).map_err(|e| e.to_string())?;
     }
-    // ponytail: u32 RIFF sizes cap a file at 4 GB (~3 h of stereo 48 kHz float); RF64 past that.
-    let len = w.stream_position()? as u32;
-    if channels == 0 {
-        header(&mut w, 2, rate, 0)?; // nothing recorded: still a valid, empty WAV
-    } else {
-        w.seek(SeekFrom::Start(0))?;
-        header(&mut w, channels, rate, len - 44)?;
-    }
-    w.flush()
+    out.clear();
+    out.reserve(7200);
+    enc.flush_to_vec::<FlushNoGap>(&mut out)
+        .map_err(|e| err(&e))?;
+    w.write_all(&out)
+        .and_then(|()| w.flush())
+        .map_err(|e| e.to_string())
 }
 
-fn header(w: &mut impl Write, channels: u16, rate: u32, data: u32) -> std::io::Result<()> {
-    let block = channels * 4;
-    w.write_all(b"RIFF")?;
-    w.write_all(&(36 + data).to_le_bytes())?;
-    w.write_all(b"WAVEfmt ")?;
-    w.write_all(&16u32.to_le_bytes())?;
-    w.write_all(&3u16.to_le_bytes())?; // IEEE float
-    w.write_all(&channels.to_le_bytes())?;
-    w.write_all(&rate.to_le_bytes())?;
-    w.write_all(&(rate * block as u32).to_le_bytes())?;
-    w.write_all(&block.to_le_bytes())?;
-    w.write_all(&32u16.to_le_bytes())?;
-    w.write_all(b"data")?;
-    w.write_all(&data.to_le_bytes())
-}
-
-/// `<dir>/YYYY-MM-DD-hh.mm.ss-<device-name>.wav`, local time; the name lowercased, spaces → `-`. `~` expands to $HOME.
+/// `<dir>/YYYY-MM-DD-hh.mm.ss-<device-name>.mp3`, local time; the name lowercased, spaces → `-`. `~` expands to $HOME.
 pub fn file_path(dir: &str, name: &str) -> PathBuf {
     let dir = match dir.strip_prefix("~") {
         Some(rest) => {
@@ -178,25 +185,52 @@ pub fn file_path(dir: &str, name: &str) -> PathBuf {
     };
     let stamp = String::from_utf8_lossy(&buf[..len]);
     let name = name.to_lowercase().replace(['/', ' '], "-");
-    dir.join(format!("{stamp}-{name}.wav"))
+    dir.join(format!("{stamp}-{name}.mp3"))
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn wav_roundtrip() {
-        let path = std::env::temp_dir().join("recordr-test.wav");
+    fn mp3_roundtrip() {
+        // 1 s of a loud 440 Hz tone (amplitude 1.5: must be clipped, not fail).
+        let path = std::env::temp_dir().join("recordr-test.mp3");
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send((2, vec![0.5f32, -0.5, 0.25, -0.25])).unwrap();
+        let tone: Vec<f32> = (0..48000)
+            .flat_map(|i| {
+                let v = 1.5 * (i as f32 * 440.0 * std::f32::consts::TAU / 48000.0).sin();
+                [v, v]
+            })
+            .collect();
+        tx.send(tone).unwrap();
         drop(tx);
-        super::write_wav(std::fs::File::create(&path).unwrap(), 48000, rx).unwrap();
-        let b = std::fs::read(&path).unwrap();
-        assert_eq!(b.len(), 44 + 16);
-        assert_eq!(&b[0..4], b"RIFF");
-        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()), 36 + 16);
-        assert_eq!(u16::from_le_bytes(b[22..24].try_into().unwrap()), 2);
-        assert_eq!(u32::from_le_bytes(b[40..44].try_into().unwrap()), 16);
-        assert_eq!(f32::from_le_bytes(b[44..48].try_into().unwrap()), 0.5);
+        super::write_mp3(std::fs::File::create(&path).unwrap(), 48000, rx).unwrap();
+        // macOS's own decoder must accept it.
+        let info = std::process::Command::new("afinfo")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let info = String::from_utf8_lossy(&info.stdout);
+        assert!(info.contains(".mp3") && info.contains("2 ch"), "{info}");
+        let secs: f64 = info
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("estimated duration: ")?
+                    .split(' ')
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .unwrap();
+        assert!((secs - 1.0).abs() < 0.1, "{info}");
+    }
+
+    #[test]
+    fn mixes_to_stereo() {
+        // Stereo tap (L=0.1, R=0.2 per frame) + mono mic (0.5): the mic goes to both sides.
+        let tap = [0.1f32, 0.2, 0.1, 0.2];
+        let mic = [0.5f32, 0.5];
+        let out = super::mix_stereo(&[(2, &tap), (1, &mic)]);
+        assert_eq!(out, vec![0.6, 0.7, 0.6, 0.7]);
     }
 }
 
@@ -205,8 +239,8 @@ fn file_name() {
     let p = file_path("/tmp/r", "Record in Speakr");
     let f = p.file_name().unwrap().to_str().unwrap();
     assert!(
-        p.starts_with("/tmp/r") && f.ends_with("-record-in-speakr.wav"),
+        p.starts_with("/tmp/r") && f.ends_with("-record-in-speakr.mp3"),
         "{f}"
     );
-    assert_eq!(f.len(), "YYYY-MM-DD-hh.mm.ss-record-in-speakr.wav".len());
+    assert_eq!(f.len(), "YYYY-MM-DD-hh.mm.ss-record-in-speakr.mp3".len());
 }
