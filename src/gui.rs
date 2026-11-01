@@ -1371,3 +1371,20 @@ fn shortcut_names_parse() {
     }
     assert_eq!(shortcut_name(egui::Key::R, m), "Shift+Cmd+R");
 }
+
+#[test]
+fn recording_icon_is_red() {
+    let reddish = |on: bool| {
+        let img = icon_image(&tray::icon(on).unwrap(), 32).unwrap();
+        img.pixels
+            .iter()
+            .filter(|p| p.a() > 128 && p.r() > 150 && p.g() < 90 && p.b() < 90)
+            .count()
+    };
+    assert!(
+        reddish(true) > 50,
+        "recording icon has {} red pixels",
+        reddish(true)
+    );
+    assert_eq!(reddish(false), 0, "idle icon should stay a plain template");
+}
