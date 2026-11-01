@@ -84,11 +84,6 @@
   <h2>Download</h2>
   <p><a class="btn" href="https://github.com/rafadc/recordr/releases/download/nightly/recordr.dmg">Download nightly .dmg</a></p>
   <p>Apple Silicon. Open the .dmg and drag recordr into Applications. It isn't notarized yet, so the first time go to System Settings → Privacy &amp; Security and click <b>Open Anyway</b>.</p>
-  <p>Or build it from source (Rust needed):</p>
-  <pre><code>git clone https://github.com/rafadc/recordr.git
-cd recordr
-./bundle.sh
-cp -R target/recordr.app /Applications/</code></pre>
 
   <span class="eyebrow">Quick guide</span>
   <h2>Four steps</h2>
@@ -102,11 +97,13 @@ cp -R target/recordr.app /Applications/</code></pre>
 
   <span class="eyebrow">Command line</span>
   <h2>From the terminal</h2>
+  <p>The app's binary is also the CLI. Put it on your PATH once:</p>
+  <pre><code>sudo ln -s /Applications/recordr.app/Contents/MacOS/recordr /usr/local/bin/recordr</code></pre>
   <pre><code>recordr list                                    <span class="c"># apps, devices and inputs</span>
 recordr run Podcast --app com.spotify.client    <span class="c"># Spotify → "Podcast" input</span>
 recordr run Call --app com.google.Chrome --device BuiltInMicrophoneDevice
 recordr run Everything --system --mute          <span class="c"># all system audio, silent on speakers</span></code></pre>
-  <p>The device lives until you press Ctrl-C.</p>
+  <p>The device lives until you press Ctrl-C. From a terminal, macOS asks for the permissions on behalf of your terminal app (Terminal, iTerm…), not recordr.</p>
 
   <span class="eyebrow">Limits</span>
   <h2>Good to know</h2>
