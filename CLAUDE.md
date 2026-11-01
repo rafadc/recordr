@@ -27,7 +27,7 @@ Build, install, and relaunch the real app (`cargo run` doesn't exercise these):
 ```sh
 ./bundle.sh && pkill -f "recordr.app/Contents/MacOS/recordr"; rm -rf /Applications/recordr.app && cp -R target/recordr.app /Applications/ && open /Applications/recordr.app
 ```
-Only the installed `.app` gets the TCC permissions (Audio Capture, Microphone), the login item, and the icon. The ad-hoc codesign only works on this Mac; distributing the app needs a Developer ID signature plus notarization.
+Only the installed `.app` gets the TCC permissions (Audio Capture, Microphone), the login item, and the icon. `bundle.sh` signs with a self-signed "recordr local signing" identity, creating it in the login keychain on first run. A stable signature makes TCC keep the grants across rebuilds; an ad-hoc signature would reset them every build. It only works on this Mac; distributing the app needs a Developer ID signature plus notarization. Permission status in Settings comes from the private `TCCAccessPreflight` (`tcc_status` in `src/gui.rs`).
 
 Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writes `assets/AppIcon.icns`).
 

@@ -21,6 +21,7 @@ struct App {
     error: Option<String>,
     login_registered: bool,
     settings_open: bool,
+    perms: [Perm; 2],      // re-checked on every refresh
     show_continuity: bool, // setting: list iPhone (Continuity) mics as inputs
     dark: bool,            // setting: Dark vs Bright theme
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
@@ -204,6 +205,7 @@ impl App {
                 symbol: true,
             })
             .collect();
+        self.perms = PERMS.map(|(_, service, _)| tcc_status(service));
         self.last_refresh = Some(Instant::now());
         // Drop meters for things that vanished, and failed ones so they get retried.
         let wanted: Vec<&String> = self
@@ -294,12 +296,15 @@ impl eframe::App for App {
                     self.add_device();
                     self.settings_open = false;
                 }
+                let missing = self.perms.contains(&Perm::Denied);
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.add_space(4.0);
-                    if ui
-                        .selectable_label(self.settings_open, "⚙ Settings")
-                        .clicked()
-                    {
+                    let label = if missing {
+                        "⚠ Settings"
+                    } else {
+                        "⚙ Settings"
+                    };
+                    if ui.selectable_label(self.settings_open, label).clicked() {
                         self.settings_open = true;
                     }
                 });
@@ -325,6 +330,26 @@ impl eframe::App for App {
                         ui.ctx().set_theme(theme(self.dark));
                     }
                 });
+                ui.add_space(16.0);
+                ui.strong("Permissions");
+                for ((name, _, pane), status) in PERMS.iter().zip(self.perms) {
+                    ui.horizontal(|ui| {
+                        ui.label(*name);
+                        match status {
+                            Perm::Granted => ui.colored_label(TANGERINE, "✔ Granted"),
+                            Perm::Unknown => {
+                                ui.weak("Not asked yet: macOS asks when it's first needed")
+                            }
+                            Perm::Denied => {
+                                ui.colored_label(CINNABAR, "✖ Missing");
+                                if ui.link("Open System Settings").clicked() {
+                                    open_settings(pane);
+                                }
+                                ui.weak("then relaunch recordr")
+                            }
+                        };
+                    });
+                }
             });
             return;
         }
@@ -338,6 +363,19 @@ impl eframe::App for App {
                 return;
             };
             let live = d.live.is_some();
+
+            if self.perms.contains(&Perm::Denied) {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        CINNABAR,
+                        "⚠ recordr is missing permissions, so devices may be silent.",
+                    );
+                    if ui.link("Fix in Settings").clicked() {
+                        self.settings_open = true;
+                    }
+                });
+                ui.separator();
+            }
 
             ui.horizontal(|ui| {
                 ui.add_enabled(
@@ -679,4 +717,59 @@ fn theme(dark: bool) -> egui::Theme {
     } else {
         egui::Theme::Light
     }
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Perm {
+    #[default]
+    Unknown,
+    Granted,
+    Denied,
+}
+
+/// (label, TCC service, System Settings pane) for each permission recordr needs.
+const PERMS: [(&str, &str, &str); 2] = [
+    (
+        "Audio Capture",
+        "kTCCServiceAudioCapture",
+        "Privacy_ScreenCapture",
+    ),
+    ("Microphone", "kTCCServiceMicrophone", "Privacy_Microphone"),
+];
+
+/// Asks TCC whether we hold `service`, without prompting.
+// ponytail: TCCAccessPreflight is private API (there's no public one for Audio Capture);
+// if Apple removes it every permission just reads "Not asked yet".
+fn tcc_status(service: &str) -> Perm {
+    use std::ffi::{c_char, c_int, c_void};
+    unsafe extern "C" {
+        fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    }
+    type Preflight = unsafe extern "C" fn(*const c_void, *const c_void) -> c_int;
+    let f = unsafe {
+        let h = dlopen(
+            c"/System/Library/PrivateFrameworks/TCC.framework/TCC".as_ptr(),
+            1,
+        );
+        if h.is_null() {
+            return Perm::Unknown;
+        }
+        dlsym(h, c"TCCAccessPreflight".as_ptr())
+    };
+    if f.is_null() {
+        return Perm::Unknown;
+    }
+    let f: Preflight = unsafe { std::mem::transmute(f) };
+    let name = objc2_foundation::NSString::from_str(service); // toll-free bridged to CFString
+    match unsafe { f(objc2::rc::Retained::as_ptr(&name).cast(), std::ptr::null()) } {
+        0 => Perm::Granted,
+        1 => Perm::Denied,
+        _ => Perm::Unknown,
+    }
+}
+
+fn open_settings(pane: &str) {
+    let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
+    let _ = std::process::Command::new("open").arg(url).spawn();
 }

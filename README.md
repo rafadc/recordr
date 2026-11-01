@@ -36,6 +36,8 @@ macOS asks for two permissions the first time recordr needs them:
 - **Audio Capture**, to capture app audio. If your devices are silent, check System Settings → Privacy & Security → Screen & System Audio Recording.
 - **Microphone**, for input levels and for mixing in microphones.
 
+**⚙ Settings → Permissions** shows whether each one is granted. If one is missing, the sidebar shows **⚠ Settings** and the device page shows a warning. Use **Open System Settings** to grant it, then relaunch recordr.
+
 ## Command line
 
 The app's binary also works from a terminal:
