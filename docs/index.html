@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>recordr — virtual audio inputs for macOS</title>
+<meta name="description" content="Route sound from your Mac apps and microphones into a virtual input any app can use. No driver.">
+<link rel="icon" href="icon.svg">
+<style>
+  :root { --bg:#fff; --fg:#1d1d1f; --muted:#6e6e73; --card:#f5f5f7; --accent:#e5484d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --fg:#f5f5f7; --muted:#a1a1a6; --card:#1c1c1e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:48px 16px 80px; }
+  header { text-align:center; margin-bottom:56px; }
+  header img { width:128px; height:128px; }
+  h1 { font-size:48px; margin:12px 0 4px; letter-spacing:-1px; }
+  .tagline { font-size:22px; color:var(--muted); margin:0 0 24px; }
+  .btn { display:inline-block; background:var(--accent); color:#fff; padding:10px 22px; border-radius:999px; text-decoration:none; font-weight:600; }
+  h2 { margin-top:48px; font-size:28px; }
+  .features { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; padding:0; list-style:none; }
+  .features li { background:var(--card); border-radius:14px; padding:16px 18px; }
+  .features b { display:block; }
+  pre { background:var(--card); border-radius:12px; padding:14px 16px; overflow-x:auto; font-size:14px; }
+  code { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  ol li, ul li { margin-bottom:6px; }
+  .muted { color:var(--muted); }
+  footer { margin-top:64px; text-align:center; color:var(--muted); font-size:14px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.svg" alt="">
+    <h1>recordr</h1>
+    <p class="tagline">Virtual audio inputs for your Mac. No driver.</p>
+    <a class="btn" href="https://github.com/rafadc/recordr">View on GitHub</a>
+  </header>
+
+  <p>recordr takes the sound from your apps and microphones and turns it into a new input device. Zoom, OBS, Logic or any other app can then pick it as if it were a microphone. It uses Core Audio process taps, so there's nothing to install in the system. Requires <b>macOS 14.2 or later</b>.</p>
+
+  <ul class="features">
+    <li><b>Capture any app</b> Spotify, Chrome, a game: pick the apps whose sound goes into the device.</li>
+    <li><b>Mix in microphones</b> Add physical inputs as extra channels.</li>
+    <li><b>All system audio</b> Or capture everything at once.</li>
+    <li><b>Mute on speakers</b> Send an app to the device without hearing it yourself.</li>
+    <li><b>Live meters</b> L/R level bars on every source.</li>
+    <li><b>Always there</b> Devices are saved and restart with your Mac.</li>
+  </ul>
+
+  <h2>Install</h2>
+  <p>Build it from source with Rust installed:</p>
+  <pre><code>git clone https://github.com/rafadc/recordr.git
+cd recordr
+./bundle.sh
+cp -R target/recordr.app /Applications/</code></pre>
+  <p class="muted">The app isn't notarized yet, so it only runs on the Mac where it was built.</p>
+
+  <h2>Quick guide</h2>
+  <ol>
+    <li><b>Create a device.</b> Click <b>+ New device</b> in the sidebar and give it a name.</li>
+    <li><b>Pick sources.</b> Click the app and input tiles you want, or check <b>All system audio</b>. Check <b>Mute sources on speakers</b> to stop hearing them.</li>
+    <li><b>Start it.</b> Click <b>▶ Start</b>. The device shows up as an input in every app.</li>
+    <li><b>Use it.</b> In Zoom, OBS or your DAW, choose the device's name as the microphone.</li>
+  </ol>
+  <p>The first time, macOS asks for <b>Audio Capture</b> and <b>Microphone</b> access. If a device is silent, check System Settings → Privacy &amp; Security → Screen &amp; System Audio Recording.</p>
+
+  <h2>From the terminal</h2>
+  <pre><code>recordr list                                    # apps, devices and inputs
+recordr run Podcast --app com.spotify.client    # Spotify → "Podcast" input
+recordr run Call --app com.google.Chrome --device BuiltInMicrophoneDevice
+recordr run Everything --system --mute          # all system audio, silent on speakers</code></pre>
+  <p>The device lives until you press Ctrl-C.</p>
+
+  <h2>Good to know</h2>
+  <ul>
+    <li>An app appears only after it has played sound. Apps launched after you start a device need a stop and start.</li>
+    <li>Microphones are added as extra channels, not mixed into the stereo pair.</li>
+    <li>No per-source volume or channel mapping yet.</li>
+  </ul>
+
+  <footer>recordr · <a href="https://github.com/rafadc/recordr">github.com/rafadc/recordr</a></footer>
+</main>
+</body>
+</html>
