@@ -1,30 +1,57 @@
 # recordr
 
-Loopback-style virtual audio devices for macOS, in Rust. It routes app audio into a virtual input that any app (Zoom, OBS, Logic…) can select.
+recordr creates virtual audio inputs on your Mac. It routes sound from your apps and microphones into an input that any app (Zoom, OBS, Logic…) can pick as a microphone. You don't install a driver. It needs **macOS 14.2 or later**.
 
-It uses Core Audio process taps and a public aggregate device, so you don't install a driver. It needs **macOS 14.2+**.
+## Install
 
 ```sh
-cargo build --release
-recordr                                                   # open the window
-recordr list                                              # audio processes + device UIDs
+./bundle.sh
+cp -R target/recordr.app /Applications/
+```
+
+Open recordr from Applications, Spotlight, or Raycast. The first time you open it, recordr adds itself to your login items so your devices come back after a restart. To turn that off, go to System Settings → General → Login Items.
+
+## Using it
+
+1. **Create a device.** Click **+ New device** in the sidebar and give it a name.
+2. **Pick sources.** Click the tiles to select them:
+   - **Apps**: apps that have played sound since they launched. System processes are under **Other processes**.
+   - **Input devices**: microphones and other inputs. They're added as extra channels.
+   - **All system audio**: captures everything instead of specific apps.
+   - **Mute sources on speakers**: you stop hearing the selected apps, but they still go into the device.
+3. **Start it.** Click **▶ Start**. The device appears as an input in every app. To change its sources, stop it first.
+
+Each tile shows live L/R level bars, so you can see what's making sound. The meters run while the window is visible, and macOS shows its recording indicators during that time. They stop when you minimize the window.
+
+Devices and their sources are saved. Devices that were running when you quit start again when recordr opens.
+
+### Settings
+
+To open settings, click **⚙ Settings** at the bottom of the sidebar.
+- **Show Continuity sources** (off by default): lists your iPhone's microphone as an input. iPhone and Bluetooth microphones never get a level meter, because opening them wakes the iPhone or switches AirPods to call quality.
+
+## Permissions
+
+macOS asks for two permissions the first time recordr needs them:
+- **Audio Capture**, to capture app audio. If your devices are silent, check System Settings → Privacy & Security → Screen & System Audio Recording.
+- **Microphone**, for input levels and for mixing in microphones.
+
+## Command line
+
+The app's binary also works from a terminal:
+
+```sh
+recordr list                                              # audio processes, devices and inputs
 recordr run Podcast --app com.spotify.client              # Spotify -> "Podcast" input
 recordr run Call --app com.google.Chrome --device BuiltInMicrophoneDevice
 recordr run Everything --system --mute                    # all system audio, silenced on speakers
 ```
 
-Devices you set up in the window are saved in `~/Library/Application Support/recordr` and reopen stopped. A device exists while it's started in the window or while `recordr run` is running. Stop, quit, or Ctrl-C removes it.
+The device exists until you press Ctrl-C.
 
-On the first run, macOS asks for **Audio Capture** permission for your terminal. If you get silence, check System Settings → Privacy & Security → Screen & System Audio Recording.
+## Limits
 
-## Mac app
-```sh
-./bundle.sh                              # -> target/recordr.app
-cp -R target/recordr.app /Applications/
-```
-macOS then asks for Audio Capture permission for *recordr* itself instead of your terminal. The ad-hoc signature only works on this Mac. To share the app, sign it with a Developer ID and notarize it.
-
-## Limits (vs Loopback)
-- `--app` only matches processes that have already opened audio (`recordr list`). Apps launched later aren't picked up.
-- `--device` inputs show up as extra channels. They aren't mixed into the stereo pair.
+- An app only appears once it has played sound. An app launched after you start a device isn't captured until you stop and start the device again.
+- Input devices are added as extra channels. They aren't mixed into the stereo pair.
 - There's no per-source volume and no channel mapping.
+- The app only works on the Mac where it was built, because it isn't notarized.
