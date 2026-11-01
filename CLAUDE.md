@@ -47,12 +47,15 @@ Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writ
     3. `Drop` destroys the aggregate and the tap. Devices exist only while recordr runs.
   - The `recordr.<name>` uid prefix marks our own devices. Stale ones from a crash are removed on create, and the GUI filters them out of the inputs.
 - **`src/record.rs`**: the Record button. An IOProc on the live aggregate interleaves all of its channels (tap stereo + inputs) and sends them over an mpsc channel to a writer thread, which writes a Float32 WAV and patches the header sizes on `Drop`.
+- **`src/tray.rs`**: the menu bar icon (`NSStatusItem`) and the Dock activation policy (Regular vs Accessory).
+  - Menu items target a `define_class!` object. egui runs no frames while the app is hidden, so **Open** unhides the app from Objective-C directly. **Quit** also shows the window, then sets a flag that `App::handle_window` turns into a normal close, so eframe saves state.
+  - With the icon shown, closing the window calls `NSApp.hide` instead of quitting. A Dock click then unhides the app for free.
 - **`src/meter.rs`**: live L/R peak meters.
   - For an app: a *private, unmuted* tap and a *private* aggregate. For an input: an IOProc directly on the device.
   - The audio thread writes peaks into `AtomicU32` f32 bits, and the GUI reads them with `levels()`.
   - It assumes Float32 samples.
 - **`src/gui.rs`**: the eframe/egui window.
-  - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`, `dark`, `record_dir`. Colors are the site palette (`GRAPHITE`/`CORAL`/`TANGERINE`/`CINNABAR` in `gui.rs`, mirrored in `docs/index.html`).
+  - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`, `dark`, `record_dir`, `show_in`. Colors are the site palette (`GRAPHITE`/`CORAL`/`TANGERINE`/`CINNABAR` in `gui.rs`, mirrored in `docs/index.html`).
   - On launch:
     - Devices that were running at quit restart.
     - The app registers itself as a login item once through `SMAppService`, only when running from a `.app`.

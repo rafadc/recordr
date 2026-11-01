@@ -8,7 +8,7 @@ ctrlc = "3.5.2"
 libc = "0.2"
 eframe = { version = "0.37.0", features = ["persistence"] }
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSRunningApplication", "NSWorkspace", "libc", "objc2-core-foundation", "std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSMenu", "NSMenuItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWindow", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSRunningApplication", "NSWorkspace", "libc", "objc2-core-foundation", "std"] }
 objc2-core-audio = "0.3.2"
 objc2-core-audio-types = "0.3.2"
 objc2-core-foundation = "0.3.2"

@@ -7,6 +7,7 @@ use crate::{
     meter::Meter,
     processes,
     record::{self, Recorder},
+    tray::{self, Tray},
 };
 use eframe::egui;
 use std::collections::HashMap;
@@ -38,6 +39,9 @@ struct App {
     show_continuity: bool, // setting: list iPhone (Continuity) mics as inputs
     dark: bool,            // setting: Dark vs Bright theme
     record_dir: String,    // setting: where Record saves WAVs; `~` allowed
+    show_in: ShowIn,       // setting: Dock icon, menu bar icon, or both
+    tray: Option<Tray>,    // the menu bar icon, when shown
+    quitting: bool,        // Quit from the menu bar: let the close through
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -61,6 +65,15 @@ const LOGIN: &str = "login_item_registered";
 const SHOW_CONTINUITY: &str = "show_continuity";
 const DARK: &str = "dark";
 const RECORD_DIR: &str = "record_dir";
+const SHOW_IN: &str = "show_in";
+
+#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+enum ShowIn {
+    #[default]
+    Both,
+    Dock,
+    MenuBar,
+}
 
 // Palette shared with the website (docs/index.html).
 const GRAPHITE: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
@@ -143,6 +156,11 @@ pub fn run() -> Result<(), String> {
             .storage
             .and_then(|s| eframe::get_value(s, RECORD_DIR))
             .unwrap_or_else(|| "~/Music/recordr".into());
+        app.show_in = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, SHOW_IN))
+            .unwrap_or_default();
+        app.apply_show_in(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         cc.egui_ctx.set_theme(theme(app.dark));
         if app.devices.is_empty() {
@@ -278,6 +296,32 @@ impl App {
         ctx.request_repaint_after(Duration::from_millis(33));
     }
 
+    fn apply_show_in(&mut self, ctx: &egui::Context) {
+        tray::set_dock(self.show_in != ShowIn::MenuBar);
+        if self.show_in == ShowIn::Dock {
+            self.tray = None;
+        } else if self.tray.is_none() {
+            self.tray = Some(Tray::new(ctx));
+        }
+    }
+
+    /// Quit from the menu bar, and closing the window: with a menu bar icon it only hides the app.
+    fn handle_window(&mut self, ctx: &egui::Context) {
+        use egui::ViewportCommand as Cmd;
+        if tray::take_quit() {
+            self.quitting = true;
+            ctx.send_viewport_cmd(Cmd::Close);
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && self.tray.is_some() && !self.quitting {
+            ctx.send_viewport_cmd(Cmd::CancelClose);
+            tray::hide();
+        }
+        let recording = self.devices.iter().any(|d| d.rec.is_some());
+        if let Some(t) = &mut self.tray {
+            t.set_recording(recording);
+        }
+    }
+
     fn add_device(&mut self) {
         let name = format!("Loopback Audio {}", self.devices.len() + 1);
         self.devices.push(Device {
@@ -302,9 +346,11 @@ impl eframe::App for App {
         eframe::set_value(storage, SHOW_CONTINUITY, &self.show_continuity);
         eframe::set_value(storage, DARK, &self.dark);
         eframe::set_value(storage, RECORD_DIR, &self.record_dir);
+        eframe::set_value(storage, SHOW_IN, &self.show_in);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.handle_window(&ui.ctx().clone());
         self.update_meters(&ui.ctx().clone());
         egui::Panel::left("devices")
             .resizable(false)
@@ -351,6 +397,16 @@ impl eframe::App for App {
                     let b = ui.selectable_value(&mut self.dark, true, "☾ Dark");
                     if a.changed() || b.changed() {
                         ui.ctx().set_theme(theme(self.dark));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Show in");
+                    let before = self.show_in;
+                    ui.selectable_value(&mut self.show_in, ShowIn::Both, "Dock and menu bar");
+                    ui.selectable_value(&mut self.show_in, ShowIn::Dock, "Dock only");
+                    ui.selectable_value(&mut self.show_in, ShowIn::MenuBar, "Menu bar only");
+                    if self.show_in != before {
+                        self.apply_show_in(&ui.ctx().clone());
                     }
                 });
                 ui.add_space(16.0);
