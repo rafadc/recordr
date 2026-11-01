@@ -10,6 +10,7 @@ use crate::{
     tray::{self, Tray},
 };
 use eframe::egui;
+use global_hotkey::hotkey::HotKey;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,99 @@ impl Device {
     fn start(&mut self) -> Result<(), String> {
         self.live = Some(Loopback::create(&self.args)?);
         Ok(())
+    }
+
+    /// Stop recording, or start it (starting the device first if needed).
+    fn toggle_record(&mut self, dir: &str) -> Result<(), String> {
+        if self.rec.take().is_some() {
+            return Ok(()); // Drop finalizes the file
+        }
+        if self.live.is_none() {
+            self.start()?;
+        }
+        let dev = self.live.as_ref().map_or(0, |l| l.dev_id);
+        self.rec = Some(Recorder::start(
+            dev,
+            record::file_path(dir, &self.args.name),
+        )?);
+        Ok(())
+    }
+}
+
+/// Global shortcuts (Carbon hot keys: no Accessibility permission needed). Presses arrive on
+/// the main thread, get queued, and wake `App::logic`, which runs even while the window is hidden.
+struct Hotkeys {
+    manager: global_hotkey::GlobalHotKeyManager,
+    registered: Vec<(String, Option<HotKey>)>, // per device: its shortcut, and the hotkey if it registered
+    pressed: std::sync::mpsc::Receiver<u32>,
+}
+
+impl Hotkeys {
+    fn new(ctx: &egui::Context) -> Option<Self> {
+        let manager = global_hotkey::GlobalHotKeyManager::new()
+            .map_err(|e| eprintln!("shortcuts: {e}"))
+            .ok()?;
+        let (tx, pressed) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        global_hotkey::GlobalHotKeyEvent::set_event_handler(Some(
+            move |e: global_hotkey::GlobalHotKeyEvent| {
+                if e.state == global_hotkey::HotKeyState::Pressed {
+                    let _ = tx.send(e.id);
+                    ctx.request_repaint();
+                }
+            },
+        ));
+        Some(Hotkeys {
+            manager,
+            registered: vec![],
+            pressed,
+        })
+    }
+
+    /// Re-register when any device's shortcut changed. Returns None if nothing changed,
+    /// else the outcome: the first error, or None if all registered.
+    fn sync(&mut self, devices: &[Device]) -> Option<Option<String>> {
+        let wanted: Vec<&str> = devices.iter().map(|d| d.args.shortcut.as_str()).collect();
+        if wanted.iter().eq(self.registered.iter().map(|(s, _)| s)) {
+            return None;
+        }
+        for (_, h) in self.registered.drain(..) {
+            if let Some(h) = h {
+                let _ = self.manager.unregister(h);
+            }
+        }
+        let mut error = None;
+        for s in wanted {
+            let h = (!s.is_empty()).then(|| {
+                let h: HotKey = s.parse().map_err(|e| format!("Shortcut {s}: {e}"))?;
+                self.manager
+                    .register(h)
+                    .map_err(|e| format!("Shortcut {s}: {e}"))?;
+                Ok::<_, String>(h)
+            });
+            let h = match h {
+                Some(Ok(h)) => Some(h),
+                Some(Err(e)) => {
+                    error.get_or_insert(e);
+                    None
+                }
+                None => None,
+            };
+            self.registered.push((s.to_string(), h));
+        }
+        Some(error)
+    }
+
+    /// Indices of devices whose shortcut was pressed since the last call.
+    fn take_pressed(&self) -> Vec<usize> {
+        self.pressed
+            .try_iter()
+            .filter_map(|id| {
+                self.registered
+                    .iter()
+                    .position(|(_, h)| h.is_some_and(|h| h.id() == id))
+            })
+            .collect()
     }
 }
 
@@ -42,6 +136,9 @@ struct App {
     show_in: ShowIn,       // setting: Dock icon, menu bar icon, or both
     tray: Option<Tray>,    // the menu bar icon, when shown
     quitting: bool,        // Quit from the menu bar: let the close through
+    hotkeys: Option<Hotkeys>,
+    capturing: Option<usize>, // device whose record shortcut is being typed
+    shortcut_error: Option<String>, // from the last shortcut registration
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -161,6 +258,7 @@ pub fn run() -> Result<(), String> {
             .and_then(|s| eframe::get_value(s, SHOW_IN))
             .unwrap_or_default();
         app.apply_show_in(&cc.egui_ctx);
+        app.hotkeys = Hotkeys::new(&cc.egui_ctx);
         install_theme(&cc.egui_ctx);
         cc.egui_ctx.set_theme(theme(app.dark));
         if app.devices.is_empty() {
@@ -337,6 +435,25 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Runs every frame, and also while the window is hidden (unlike `ui`).
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(h) = &mut self.hotkeys {
+            if let Some(result) = h.sync(&self.devices) {
+                self.shortcut_error = result;
+            }
+            for i in h.take_pressed() {
+                if let Some(Err(e)) = self
+                    .devices
+                    .get_mut(i)
+                    .map(|d| d.toggle_record(&self.record_dir))
+                {
+                    self.error = Some(e);
+                }
+            }
+        }
+        self.handle_window(ctx);
+    }
+
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let args: Vec<&RunArgs> = self.devices.iter().map(|d| &d.args).collect();
         eframe::set_value(storage, KEY, &args);
@@ -350,7 +467,6 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.handle_window(&ui.ctx().clone());
         self.update_meters(&ui.ctx().clone());
         egui::Panel::left("devices")
             .resizable(false)
@@ -469,13 +585,16 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             let (mut delete, mut refresh) = (false, false);
             let many = self.devices.len() > 1;
-            let (apps, inputs, error, meters, installed, record_dir) = (
+            let sel = self.selected;
+            let (apps, inputs, error, meters, installed, record_dir, capturing, shortcut_error) = (
                 &self.apps,
                 &self.inputs,
                 &mut self.error,
                 &self.meters,
                 &self.installed,
                 &self.record_dir,
+                &mut self.capturing,
+                &self.shortcut_error,
             );
             let Some(d) = self.devices.get_mut(self.selected) else {
                 return;
@@ -528,21 +647,7 @@ impl eframe::App for App {
                     .on_hover_text("Save the device's audio as a WAV in the Settings folder.")
                     .clicked()
                 {
-                    *error = None;
-                    if recording {
-                        d.rec = None; // Drop finalizes the file
-                    } else {
-                        // Record starts the device if needed.
-                        let started = if d.live.is_some() { Ok(()) } else { d.start() };
-                        let rec = started.and_then(|()| {
-                            let dev = d.live.as_ref().map_or(0, |l| l.dev_id);
-                            Recorder::start(dev, record::file_path(record_dir, &d.args.name))
-                        });
-                        match rec {
-                            Ok(r) => d.rec = Some(r),
-                            Err(e) => *error = Some(e),
-                        }
-                    }
+                    *error = d.toggle_record(record_dir).err();
                 }
                 // Closed apps are skipped by Loopback::create; say so.
                 let closed: Vec<String> = d
@@ -565,7 +670,56 @@ impl eframe::App for App {
                     delete = true;
                 }
             });
-            if let Some(e) = error {
+            ui.horizontal(|ui| {
+                ui.label("Record shortcut");
+                if *capturing == Some(sel) {
+                    ui.colored_label(CORAL, "Press a shortcut… (Esc cancels)");
+                    let key = ui.input(|i| {
+                        i.events.iter().find_map(|e| match e {
+                            egui::Event::Key {
+                                key,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } => Some((*key, *modifiers)),
+                            _ => None,
+                        })
+                    });
+                    use egui::Key::*;
+                    match key {
+                        Some((Escape, _)) => *capturing = None,
+                        // Modifiers arrive as key presses too; wait for the real key.
+                        Some((
+                            ShiftLeft | ShiftRight | ControlLeft | ControlRight | AltLeft
+                            | AltRight | SuperLeft | SuperRight,
+                            _,
+                        )) => {}
+                        // Require a modifier, so a plain letter isn't stolen from every app.
+                        Some((key, m)) if m.mac_cmd || m.ctrl || m.alt => {
+                            d.args.shortcut = shortcut_name(key, m);
+                            *capturing = None;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    let text = if d.args.shortcut.is_empty() {
+                        "Set…"
+                    } else {
+                        &d.args.shortcut
+                    };
+                    if ui
+                        .button(text)
+                        .on_hover_text("Toggles recording from any app.")
+                        .clicked()
+                    {
+                        *capturing = Some(sel);
+                    }
+                    if !d.args.shortcut.is_empty() && ui.small_button("Clear").clicked() {
+                        d.args.shortcut.clear();
+                    }
+                }
+            });
+            for e in [&*error, shortcut_error].into_iter().flatten() {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
             if live {
@@ -985,6 +1139,19 @@ fn tcc_status(service: &str) -> Perm {
     }
 }
 
+/// "Ctrl+Option+Shift+Cmd+R": readable, and parseable by `global_hotkey`.
+fn shortcut_name(key: egui::Key, m: egui::Modifiers) -> String {
+    let mods = [
+        (m.ctrl, "Ctrl"),
+        (m.alt, "Option"),
+        (m.shift, "Shift"),
+        (m.mac_cmd, "Cmd"),
+    ];
+    let mut parts: Vec<&str> = mods.iter().filter(|(on, _)| *on).map(|(_, n)| *n).collect();
+    parts.push(key.name());
+    parts.join("+")
+}
+
 const CLI_LINK: &str = "/usr/local/bin/recordr";
 
 fn cli_installed() -> bool {
@@ -1013,4 +1180,23 @@ fn install_cli() {
 fn open_settings(pane: &str) {
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
     let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+#[test]
+fn shortcut_names_parse() {
+    let m = egui::Modifiers {
+        mac_cmd: true,
+        shift: true,
+        ..Default::default()
+    };
+    for key in [
+        egui::Key::R,
+        egui::Key::Num1,
+        egui::Key::F5,
+        egui::Key::Space,
+    ] {
+        let name = shortcut_name(key, m);
+        assert!(name.parse::<HotKey>().is_ok(), "{name}");
+    }
+    assert_eq!(shortcut_name(egui::Key::R, m), "Shift+Cmd+R");
 }

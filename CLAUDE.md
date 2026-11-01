@@ -57,6 +57,7 @@ Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writ
   - It assumes Float32 samples.
 - **`src/gui.rs`**: the eframe/egui window.
   - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`, `dark`, `record_dir`, `show_in`. Colors are the site palette (`GRAPHITE`/`CORAL`/`TANGERINE`/`CINNABAR` in `gui.rs`, mirrored in `docs/index.html`).
+  - `App::logic` runs every frame, even while the window is hidden (eframe skips `ui` then). Anything that must work hidden goes there: per-device record shortcuts (`Hotkeys`, via the `global-hotkey` crate = Carbon hot keys, no Accessibility permission) and the menu bar icon's state. The shortcut is stored in `RunArgs::shortcut` (GUI only).
   - On launch:
     - Devices that were running at quit restart.
     - The app registers itself as a login item once through `SMAppService`, only when running from a `.app`.

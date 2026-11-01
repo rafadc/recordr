@@ -32,7 +32,7 @@ Open recordr from Applications, Spotlight, or Raycast. The first time you open i
    - **All system audio**: captures everything instead of specific apps.
    - **Mute sources on speakers**: you stop hearing the selected apps, but they still go into the device.
 3. **Start it.** Click **▶ Start**. The device appears as an input in every app. To change its sources, stop it first.
-4. **Record it (optional).** Click **● Record** to save the device's audio as a WAV file. It starts the device if it isn't running. Click **■ Stop recording** to finish the file. Recordings go to `~/Music/recordr` as `YYYY-MM-DD-hh.mm.ss-<device-name>.wav`; change the folder in Settings.
+4. **Record it (optional).** Click **● Record** to save the device's audio as a WAV file. It starts the device if it isn't running. Click **■ Stop recording** to finish the file. To record from any app, click **Record shortcut → Set…** and press a key combination with ⌘, ⌃ or ⌥. Each device has its own shortcut, and it works even while recordr is hidden. Recordings go to `~/Music/recordr` as `YYYY-MM-DD-hh.mm.ss-<device-name>.wav`; change the folder in Settings.
 
 Each tile shows live L/R level bars, so you can see what's making sound. The meters run while the window is visible, and macOS shows its recording indicators during that time. They stop when you minimize the window.
 

@@ -244,6 +244,7 @@ struct RunArgs {
     system: bool,
     devices: Vec<String>,
     mute: bool,
+    shortcut: String, // GUI only: global shortcut that toggles recording, e.g. "Cmd+Shift+R"
 }
 
 fn parse_run(args: &[String]) -> Result<RunArgs, String> {
@@ -463,7 +464,8 @@ mod tests {
                 apps: v("com.spotify.client 123"),
                 devices: v("mic"),
                 mute: true,
-                system: false
+                system: false,
+                ..Default::default()
             }
         );
         assert!(parse_run(&v("Zoom")).is_err(), "nothing to route");
