@@ -7,6 +7,7 @@ use crate::{
     meter::Meter,
     processes,
     record::{self, Recorder},
+    speakr::{self, Upload},
     tray::{self, Tray},
 };
 use eframe::egui;
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 struct Device {
     args: RunArgs,
     rec: Option<Recorder>, // before `live`: fields drop in order, so recording stops first
+    done: Vec<std::path::PathBuf>, // finished recordings, collected by `App::logic`
     live: Option<Loopback>,
 }
 
@@ -27,9 +29,18 @@ impl Device {
     }
 
     /// Stop recording, or start it (starting the device first if needed).
+    fn stop_recording(&mut self) {
+        if let Some(r) = self.rec.take() {
+            let path = r.path.clone();
+            drop(r); // finalizes the file
+            self.done.push(path);
+        }
+    }
+
     fn toggle_record(&mut self, dir: &str) -> Result<(), String> {
-        if self.rec.take().is_some() {
-            return Ok(()); // Drop finalizes the file
+        if self.rec.is_some() {
+            self.stop_recording();
+            return Ok(());
         }
         if self.live.is_none() {
             self.start()?;
@@ -139,6 +150,12 @@ struct App {
     hotkeys: Option<Hotkeys>,
     capturing: Option<usize>, // device whose record shortcut is being typed
     shortcut_error: Option<String>, // from the last shortcut registration
+    speakr: SpeakrSettings,
+    speakr_token: String, // kept in the Keychain, not in eframe storage
+    token_dirty: bool,
+    to_upload: Vec<std::path::PathBuf>, // finished recordings waiting for the Upload? dialog
+    upload: Option<Upload>,
+    upload_result: Option<String>, // shown until dismissed
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -163,6 +180,15 @@ const SHOW_CONTINUITY: &str = "show_continuity";
 const DARK: &str = "dark";
 const RECORD_DIR: &str = "record_dir";
 const SHOW_IN: &str = "show_in";
+const SPEAKR: &str = "speakr";
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct SpeakrSettings {
+    enabled: bool,
+    server: String,
+    delete_after: bool, // delete the local WAV once an upload succeeds
+}
 
 #[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum ShowIn {
@@ -232,6 +258,7 @@ pub fn run() -> Result<(), String> {
                 // ponytail: a failed restart (e.g. revoked permission) just leaves it stopped.
                 live: run.then(|| Loopback::create(&args).ok()).flatten(),
                 rec: None,
+                done: vec![],
                 args,
             })
             .collect();
@@ -259,6 +286,11 @@ pub fn run() -> Result<(), String> {
             .unwrap_or_default();
         app.apply_show_in(&cc.egui_ctx);
         app.hotkeys = Hotkeys::new(&cc.egui_ctx);
+        app.speakr = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, SPEAKR))
+            .unwrap_or_default();
+        app.speakr_token = speakr::load_token();
         install_theme(&cc.egui_ctx);
         cc.egui_ctx.set_theme(theme(app.dark));
         if app.devices.is_empty() {
@@ -420,6 +452,103 @@ impl App {
         }
     }
 
+    /// Move finished recordings into the upload queue (or drop them if Speakr is off),
+    /// and poll the running upload. Runs in `logic`, so it works while hidden.
+    fn collect_recordings(&mut self, ctx: &egui::Context) {
+        let mut new = false;
+        for d in &mut self.devices {
+            new |= !d.done.is_empty();
+            if self.speakr.enabled {
+                self.to_upload.append(&mut d.done);
+            } else {
+                d.done.clear();
+            }
+        }
+        if new && self.speakr.enabled {
+            tray::show(); // the Upload? dialog needs the window
+        }
+        let Some(up) = &mut self.upload else { return };
+        let Some(result) = up.poll() else {
+            ctx.request_repaint_after(Duration::from_millis(200));
+            return;
+        };
+        let path = self.upload.take().map(|u| u.path).unwrap_or_default();
+        let name = file_name(&path);
+        self.upload_result = Some(match result {
+            Ok(()) if self.speakr.delete_after => match std::fs::remove_file(&path) {
+                Ok(()) => format!("Uploaded {name} to Speakr and deleted the local file."),
+                Err(e) => format!("Uploaded {name} to Speakr, but couldn't delete it: {e}"),
+            },
+            Ok(()) => format!("Uploaded {name} to Speakr."),
+            Err(e) => format!("Couldn't upload {name}: {e}\nThe local file was kept."),
+        });
+    }
+
+    /// Upload? → Uploading… (Cancel) → result. One recording at a time.
+    fn speakr_dialog(&mut self, ctx: &egui::Context) {
+        let modal = |ctx: &egui::Context, add: &mut dyn FnMut(&mut egui::Ui)| {
+            egui::Modal::new(egui::Id::unique("speakr")).show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                ui.heading("Speakr");
+                ui.add_space(4.0);
+                add(ui);
+            });
+        };
+        if let Some(up) = &self.upload {
+            let name = file_name(&up.path);
+            let mut cancel = false;
+            modal(ctx, &mut |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(format!("Uploading {name}…"));
+                });
+                cancel = ui.button("Cancel").clicked();
+            });
+            if cancel && let Some(up) = self.upload.take() {
+                up.cancel();
+                self.upload_result = Some(format!(
+                    "Upload of {name} cancelled. The local file was kept."
+                ));
+            }
+        } else if let Some(msg) = &self.upload_result {
+            let mut ok = false;
+            modal(ctx, &mut |ui| {
+                ui.label(msg.as_str());
+                ok = ui.button("OK").clicked();
+            });
+            if ok {
+                self.upload_result = None;
+            }
+        } else if let Some(path) = self.to_upload.first().cloned() {
+            let (mut upload, mut skip) = (false, false);
+            let delete = &mut self.speakr.delete_after;
+            modal(ctx, &mut |ui| {
+                ui.label(format!("Upload {} to Speakr?", file_name(&path)));
+                ui.checkbox(delete, "Delete the local file after a successful upload");
+                ui.horizontal(|ui| {
+                    upload = ui.button("Upload").clicked();
+                    skip = ui.button("Don't upload").clicked();
+                });
+            });
+            if upload || skip {
+                self.to_upload.remove(0);
+            }
+            if upload {
+                let started = if self.speakr.server.trim().is_empty()
+                    || self.speakr_token.trim().is_empty()
+                {
+                    Err("Set the Speakr server and API token in Settings first. The local file was kept.".into())
+                } else {
+                    Upload::start(&self.speakr.server, &self.speakr_token, &path)
+                };
+                match started {
+                    Ok(u) => self.upload = Some(u),
+                    Err(e) => self.upload_result = Some(e),
+                }
+            }
+        }
+    }
+
     fn add_device(&mut self) {
         let name = format!("Loopback Audio {}", self.devices.len() + 1);
         self.devices.push(Device {
@@ -429,6 +558,7 @@ impl App {
             },
             live: None,
             rec: None,
+            done: vec![],
         });
         self.selected = self.devices.len() - 1;
     }
@@ -451,6 +581,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.collect_recordings(ctx);
         self.handle_window(ctx);
     }
 
@@ -463,10 +594,15 @@ impl eframe::App for App {
         eframe::set_value(storage, SHOW_CONTINUITY, &self.show_continuity);
         eframe::set_value(storage, DARK, &self.dark);
         eframe::set_value(storage, RECORD_DIR, &self.record_dir);
+        eframe::set_value(storage, SPEAKR, &self.speakr);
+        if std::mem::take(&mut self.token_dirty) {
+            speakr::save_token(&self.speakr_token);
+        }
         eframe::set_value(storage, SHOW_IN, &self.show_in);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.speakr_dialog(&ui.ctx().clone());
         self.update_meters(&ui.ctx().clone());
         egui::Panel::left("devices")
             .resizable(false)
@@ -536,6 +672,34 @@ impl eframe::App for App {
                         let _ = std::fs::create_dir_all(dir);
                         let _ = std::process::Command::new("open").arg(dir).spawn();
                     }
+                });
+                ui.add_space(16.0);
+                ui.strong("Speakr");
+                ui.checkbox(
+                    &mut self.speakr.enabled,
+                    "Offer to upload each recording to Speakr when it stops",
+                );
+                ui.add_enabled_ui(self.speakr.enabled, |ui| {
+                    egui::Grid::new("speakr").num_columns(2).show(ui, |ui| {
+                        ui.label("Server");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.speakr.server)
+                                .hint_text("https://speakr.example.com"),
+                        );
+                        ui.end_row();
+                        ui.label("API token");
+                        let r = ui
+                            .add(egui::TextEdit::singleline(&mut self.speakr_token).password(true));
+                        self.token_dirty |= r.changed();
+                        if r.lost_focus() && std::mem::take(&mut self.token_dirty) {
+                            speakr::save_token(&self.speakr_token);
+                        }
+                        ui.end_row();
+                    });
+                    ui.weak(
+                        "Create a token in Speakr → Account Settings → API Tokens \
+                         (the Recorder preset is enough). It's stored in your Keychain.",
+                    );
                 });
                 ui.add_space(16.0);
                 ui.strong("Command line");
@@ -627,7 +791,7 @@ impl eframe::App for App {
                 if ui.add(button).clicked() {
                     *error = None;
                     if live {
-                        d.rec = None;
+                        d.stop_recording();
                         d.live = None; // Drop removes the device
                     } else if let Err(e) = d.start() {
                         *error = Some(e);
@@ -1137,6 +1301,13 @@ fn tcc_status(service: &str) -> Perm {
         1 => Perm::Denied,
         _ => Perm::Unknown,
     }
+}
+
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// "Ctrl+Option+Shift+Cmd+R": readable, and parseable by `global_hotkey`.

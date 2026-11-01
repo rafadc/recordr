@@ -51,12 +51,16 @@ Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writ
   - Left click shows/hides the app. Right or ctrl click attaches the menu just for that click (`setMenu` + `performClick`), then detaches it.
   - The button and menu items target a `define_class!` object. egui runs no frames while the app is hidden, so **Open** unhides the app from Objective-C directly. **Quit** also shows the window, then sets a flag that `App::handle_window` turns into a normal close, so eframe saves state.
   - With the icon shown, closing the window calls `NSApp.hide` instead of quitting. A Dock click then unhides the app for free.
+- **`src/speakr.rs`**: uploads a finished recording to Speakr (`POST /api/v1/recordings/upload`, `Authorization: Bearer`). It runs the system `curl`, with the token passed through stdin (`-K -`), and polls the child each frame from `App::logic`.
+  - The token is stored with `security` under the Keychain service `recordr.speakr`.
+  - Flow in `gui.rs`: `Device::stop_recording` pushes the path to `done`, then `collect_recordings` queues it and shows the window. `speakr_dialog` walks through Upload? → Uploading… (Cancel) → result.
+  - The local file is deleted only on curl success with `delete_after` set.
 - **`src/meter.rs`**: live L/R peak meters.
   - For an app: a *private, unmuted* tap and a *private* aggregate. For an input: an IOProc directly on the device.
   - The audio thread writes peaks into `AtomicU32` f32 bits, and the GUI reads them with `levels()`.
   - It assumes Float32 samples.
 - **`src/gui.rs`**: the eframe/egui window.
-  - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`, `dark`, `record_dir`, `show_in`. Colors are the site palette (`GRAPHITE`/`CORAL`/`TANGERINE`/`CINNABAR` in `gui.rs`, mirrored in `docs/index.html`).
+  - Device configs (`RunArgs`) persist through eframe storage in `~/Library/Application Support/recordr`. Storage keys: `devices`, `running`, `login_item_registered`, `show_continuity`, `dark`, `record_dir`, `show_in`, `speakr` (server, enabled, delete-after; the API token is in the Keychain, never in storage). Colors are the site palette (`GRAPHITE`/`CORAL`/`TANGERINE`/`CINNABAR` in `gui.rs`, mirrored in `docs/index.html`).
   - `App::logic` runs every frame, even while the window is hidden (eframe skips `ui` then). Anything that must work hidden goes there: per-device record shortcuts (`Hotkeys`, via the `global-hotkey` crate = Carbon hot keys, no Accessibility permission) and the menu bar icon's state. The shortcut is stored in `RunArgs::shortcut` (GUI only).
   - On launch:
     - Devices that were running at quit restart.

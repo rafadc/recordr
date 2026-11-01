@@ -59,27 +59,28 @@ define_class!(
             } else if app.isActive() && !app.isHidden() {
                 hide();
             } else {
-                show_windows();
+                show();
             }
         }
 
         #[unsafe(method(open:))]
         fn open(&self, _sender: Option<&AnyObject>) {
             // egui doesn't run frames while hidden, so show it from here.
-            show_windows();
+            show();
         }
 
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
             // Show the window so egui runs a frame, sees the flag, and closes (saving state).
-            show_windows();
+            show();
             QUIT.store(true, Relaxed);
             wake();
         }
     }
 );
 
-fn show_windows() {
+/// Unhide the app and bring its window to the front.
+pub fn show() {
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.unhide(None);

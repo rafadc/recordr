@@ -8,6 +8,7 @@
 mod gui;
 mod meter;
 mod record;
+mod speakr;
 mod tray;
 
 use std::{ffi::c_void, ptr::NonNull, sync::mpsc};
