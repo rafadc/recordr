@@ -1,5 +1,6 @@
-//! Record a live device to a Float32 WAV: an IOProc on the aggregate hands interleaved frames
-//! to a writer thread. Dropping the Recorder stops capture and finalizes the file.
+//! Record a live device to a 16-bit PCM stereo WAV, the format every decoder (and Speakr's
+//! transcription backends) accepts. An IOProc on the aggregate mixes all its streams to stereo
+//! and hands the frames to a writer thread. Dropping the Recorder stops capture and finalizes it.
 
 use std::{
     ffi::c_void,
@@ -20,7 +21,7 @@ pub struct Recorder {
     pub path: PathBuf,
     dev: AudioObjectID,
     proc_id: AudioDeviceIOProcID,
-    tx: Option<Box<Sender<(u16, Vec<f32>)>>>, // boxed for a stable address handed to the IOProc
+    tx: Option<Box<Sender<Vec<f32>>>>, // boxed for a stable address handed to the IOProc
     writer: Option<JoinHandle<()>>,
 }
 
@@ -86,7 +87,7 @@ unsafe extern "C-unwind" fn io_proc(
     _out_time: NonNull<AudioTimeStamp>,
     data: *mut c_void,
 ) -> i32 {
-    let tx = unsafe { &*data.cast::<Sender<(u16, Vec<f32>)>>() };
+    let tx = unsafe { &*data.cast::<Sender<Vec<f32>>>() };
     let list = unsafe { input.as_ref() };
     let bufs =
         unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), list.mNumberBuffers as usize) };
@@ -101,57 +102,62 @@ unsafe extern "C-unwind" fn io_proc(
             (n, s)
         })
         .collect();
-    let channels: usize = streams.iter().map(|(n, _)| n).sum();
-    let frames = streams.iter().map(|(n, s)| s.len() / n).min().unwrap_or(0);
-    let mut out = Vec::with_capacity(frames * channels);
-    for f in 0..frames {
-        for (n, s) in &streams {
-            out.extend_from_slice(&s[f * n..(f + 1) * n]);
-        }
-    }
-    let _ = tx.send((channels as u16, out));
+    let _ = tx.send(mix_stereo(&streams));
     0
 }
 
+/// Interleaved stereo from the aggregate's streams (each `(channels, interleaved samples)`):
+/// a mono stream (a mic) goes to both sides, otherwise channel i goes to side i % 2.
+fn mix_stereo(streams: &[(usize, &[f32])]) -> Vec<f32> {
+    let frames = streams.iter().map(|(n, s)| s.len() / n).min().unwrap_or(0);
+    let mut out = vec![0f32; frames * 2];
+    for (n, s) in streams {
+        for f in 0..frames {
+            for c in 0..*n {
+                let v = s[f * n + c];
+                if *n == 1 {
+                    out[f * 2] += v;
+                    out[f * 2 + 1] += v;
+                } else {
+                    out[f * 2 + c % 2] += v;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Float32 WAV. The channel count comes from the first chunk; sizes are patched at the end.
-fn write_wav(file: File, rate: u32, rx: Receiver<(u16, Vec<f32>)>) -> std::io::Result<()> {
+/// Stereo 16-bit PCM WAV; the data size is patched into the header at the end.
+fn write_wav(file: File, rate: u32, rx: Receiver<Vec<f32>>) -> std::io::Result<()> {
     let mut w = BufWriter::new(file);
-    let mut channels = 0u16;
-    for (ch, samples) in rx {
-        if channels == 0 {
-            channels = ch.max(1);
-            header(&mut w, channels, rate, 0)?;
-        }
-        if ch != channels {
-            continue; // ponytail: a stream layout change mid-recording drops those chunks
-        }
+    header(&mut w, rate, 0)?;
+    for samples in rx {
         for s in samples {
-            w.write_all(&s.to_le_bytes())?;
+            // Mixed sources can sum past full scale: clip rather than wrap.
+            w.write_all(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())?;
         }
     }
-    // ponytail: u32 RIFF sizes cap a file at 4 GB (~3 h of stereo 48 kHz float); RF64 past that.
+    // ponytail: u32 RIFF sizes cap a file at 4 GB (~6 h of stereo 48 kHz 16-bit); RF64 past that.
     let len = w.stream_position()? as u32;
-    if channels == 0 {
-        header(&mut w, 2, rate, 0)?; // nothing recorded: still a valid, empty WAV
-    } else {
-        w.seek(SeekFrom::Start(0))?;
-        header(&mut w, channels, rate, len - 44)?;
-    }
+    w.seek(SeekFrom::Start(0))?;
+    header(&mut w, rate, len - 44)?;
     w.flush()
 }
 
-fn header(w: &mut impl Write, channels: u16, rate: u32, data: u32) -> std::io::Result<()> {
-    let block = channels * 4;
+fn header(w: &mut impl Write, rate: u32, data: u32) -> std::io::Result<()> {
+    let (channels, bits) = (2u16, 16u16);
+    let block = channels * bits / 8;
     w.write_all(b"RIFF")?;
     w.write_all(&(36 + data).to_le_bytes())?;
     w.write_all(b"WAVEfmt ")?;
     w.write_all(&16u32.to_le_bytes())?;
-    w.write_all(&3u16.to_le_bytes())?; // IEEE float
+    w.write_all(&1u16.to_le_bytes())?; // PCM
     w.write_all(&channels.to_le_bytes())?;
     w.write_all(&rate.to_le_bytes())?;
     w.write_all(&(rate * block as u32).to_le_bytes())?;
     w.write_all(&block.to_le_bytes())?;
-    w.write_all(&32u16.to_le_bytes())?;
+    w.write_all(&bits.to_le_bytes())?;
     w.write_all(b"data")?;
     w.write_all(&data.to_le_bytes())
 }
@@ -187,16 +193,36 @@ mod tests {
     fn wav_roundtrip() {
         let path = std::env::temp_dir().join("recordr-test.wav");
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send((2, vec![0.5f32, -0.5, 0.25, -0.25])).unwrap();
+        tx.send(vec![0.5f32, -0.5, 2.0, -0.25]).unwrap();
         drop(tx);
         super::write_wav(std::fs::File::create(&path).unwrap(), 48000, rx).unwrap();
         let b = std::fs::read(&path).unwrap();
-        assert_eq!(b.len(), 44 + 16);
+        let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        assert_eq!(b.len(), 44 + 8);
         assert_eq!(&b[0..4], b"RIFF");
-        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()), 36 + 16);
-        assert_eq!(u16::from_le_bytes(b[22..24].try_into().unwrap()), 2);
-        assert_eq!(u32::from_le_bytes(b[40..44].try_into().unwrap()), 16);
-        assert_eq!(f32::from_le_bytes(b[44..48].try_into().unwrap()), 0.5);
+        assert_eq!(u32_at(4), 36 + 8);
+        assert_eq!((u16_at(20), u16_at(22), u16_at(34)), (1, 2, 16)); // PCM, stereo, 16-bit
+        assert_eq!((u32_at(28), u16_at(32)), (48000 * 4, 4)); // byte rate, block align
+        assert_eq!(u32_at(40), 8);
+        assert_eq!(u16_at(44) as i16, 16383);
+        assert_eq!(u16_at(48) as i16, 32767, "clipped, not wrapped");
+        // macOS's own decoder must accept it.
+        let info = std::process::Command::new("afinfo")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let info = String::from_utf8_lossy(&info.stdout);
+        assert!(info.contains("Int16") && info.contains("2 ch"), "{info}");
+    }
+
+    #[test]
+    fn mixes_to_stereo() {
+        // Stereo tap (L=0.1, R=0.2 per frame) + mono mic (0.5): the mic goes to both sides.
+        let tap = [0.1f32, 0.2, 0.1, 0.2];
+        let mic = [0.5f32, 0.5];
+        let out = super::mix_stereo(&[(2, &tap), (1, &mic)]);
+        assert_eq!(out, vec![0.6, 0.7, 0.6, 0.7]);
     }
 }
 
