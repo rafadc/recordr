@@ -331,6 +331,19 @@ impl eframe::App for App {
                     }
                 });
                 ui.add_space(16.0);
+                ui.strong("Command line");
+                ui.horizontal(|ui| {
+                    if cli_installed() {
+                        ui.colored_label(TANGERINE, format!("✔ {CLI_LINK}"));
+                    } else if ui.button("Install command line tool").clicked() {
+                        install_cli();
+                    }
+                })
+                .response
+                .on_hover_text(format!(
+                    "Links {CLI_LINK} to this app, so `recordr` works in a terminal."
+                ));
+                ui.add_space(16.0);
                 ui.strong("Permissions");
                 for ((name, _, pane), status) in PERMS.iter().zip(self.perms) {
                     ui.horizontal(|ui| {
@@ -767,6 +780,31 @@ fn tcc_status(service: &str) -> Perm {
         1 => Perm::Denied,
         _ => Perm::Unknown,
     }
+}
+
+const CLI_LINK: &str = "/usr/local/bin/recordr";
+
+fn cli_installed() -> bool {
+    let exe = std::env::current_exe().ok();
+    std::fs::read_link(CLI_LINK).ok() == exe
+}
+
+/// Symlink the CLI via an admin prompt (/usr/local/bin is root-owned). Doesn't wait: the
+/// Settings row re-checks the link every frame.
+fn install_cli() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let exe = exe
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let script = format!(
+        "do shell script \"mkdir -p /usr/local/bin && ln -sf \" & quoted form of \"{exe}\" & \" {CLI_LINK}\" with administrator privileges"
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .spawn();
 }
 
 fn open_settings(pane: &str) {

@@ -52,7 +52,7 @@ macOS asks for two permissions the first time recordr needs them:
 
 ## Command line
 
-The app's binary also works from a terminal. Put it on your PATH once:
+The app's binary also works from a terminal. Put it on your PATH once with **⚙ Settings → Install command line tool**, or by hand:
 
 ```sh
 sudo ln -s /Applications/recordr.app/Contents/MacOS/recordr /usr/local/bin/recordr
