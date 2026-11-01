@@ -170,6 +170,13 @@ fn list() {
     for (uid, name) in device_uids() {
         println!("  {uid} — {name}");
     }
+    println!("\nInputs (transport — uid — name):");
+    for (uid, name, t) in input_devices() {
+        println!(
+            "  {} — {uid} — {name}",
+            String::from_utf8_lossy(&t.to_be_bytes())
+        );
+    }
 }
 
 fn device_uids() -> Vec<(String, String)> {

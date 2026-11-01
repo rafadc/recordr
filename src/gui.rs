@@ -20,6 +20,8 @@ struct App {
     inputs: Vec<AppEntry>, // bundle = device uid
     error: Option<String>,
     login_registered: bool,
+    settings_open: bool,
+    show_continuity: bool, // setting: list iPhone (Continuity) mics as inputs
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -31,13 +33,15 @@ struct AppEntry {
     name: String,
     playing: bool,
     icon: Option<egui::TextureHandle>,
-    symbol: bool,          // monochrome SF Symbol: tint with the text color
-    meter: Option<String>, // key into App::meters; None = not metered
+    symbol: bool,               // monochrome SF Symbol: tint with the text color
+    meter: Option<String>,      // key into App::meters; None = not metered
+    note: Option<&'static str>, // small grey subtitle under the name
 }
 
 const KEY: &str = "devices";
 const RUNNING: &str = "running";
 const LOGIN: &str = "login_item_registered";
+const SHOW_CONTINUITY: &str = "show_continuity";
 
 pub fn run() -> Result<(), String> {
     let opts = eframe::NativeOptions {
@@ -69,6 +73,10 @@ pub fn run() -> Result<(), String> {
             .and_then(|s| eframe::get_value::<bool>(s, LOGIN))
             .filter(|&done| done)
             .unwrap_or_else(register_login_item);
+        app.show_continuity = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, SHOW_CONTINUITY))
+            .unwrap_or(false);
         if app.devices.is_empty() {
             app.add_device();
         }
@@ -106,9 +114,12 @@ impl App {
                 }
                 None => (None, None),
             };
+            let name = name.unwrap_or_else(|| p.bundle.clone());
+            let name_is_helper = name.ends_with(" (helper)");
             apps.push(AppEntry {
-                name: name.unwrap_or_else(|| p.bundle.clone()),
+                name,
                 meter: icon.is_some().then(|| format!("app:{}", p.bundle)),
+                note: name_is_helper.then_some("helper"),
                 bundle: p.bundle,
                 playing: p.playing,
                 icon,
@@ -126,7 +137,9 @@ impl App {
         self.apps = apps;
         self.inputs = input_devices()
             .into_iter()
-            .filter(|(uid, _, _)| !uid.starts_with("recordr."))
+            .filter(|(uid, _, t)| {
+                !uid.starts_with("recordr.") && (self.show_continuity || !is_continuity(*t))
+            })
             .map(|(uid, name, transport)| AppEntry {
                 icon: self
                     .icons
@@ -136,7 +149,9 @@ impl App {
                             .map(|img| ctx.load_texture(&uid, img, Default::default()))
                     })
                     .clone(),
-                meter: Some(format!("in:{uid}")),
+                // Opening these connects/reconfigures the remote end, so never meter them.
+                meter: (!is_remote(transport)).then(|| format!("in:{uid}")),
+                note: is_remote(transport).then_some("no meter"),
                 bundle: uid,
                 name,
                 playing: false,
@@ -206,6 +221,7 @@ impl eframe::App for App {
         let running: Vec<bool> = self.devices.iter().map(|d| d.live.is_some()).collect();
         eframe::set_value(storage, RUNNING, &running);
         eframe::set_value(storage, LOGIN, &self.login_registered);
+        eframe::set_value(storage, SHOW_CONTINUITY, &self.show_continuity);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -217,18 +233,45 @@ impl eframe::App for App {
                 ui.heading("Devices");
                 for (i, d) in self.devices.iter().enumerate() {
                     let dot = if d.live.is_some() { "● " } else { "○ " };
+                    let current = i == self.selected && !self.settings_open;
                     if ui
-                        .selectable_label(i == self.selected, format!("{dot}{}", d.args.name))
+                        .selectable_label(current, format!("{dot}{}", d.args.name))
                         .clicked()
                     {
                         self.selected = i;
+                        self.settings_open = false;
                     }
                 }
                 ui.separator();
                 if ui.button("+ New device").clicked() {
                     self.add_device();
+                    self.settings_open = false;
+                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.add_space(4.0);
+                    if ui
+                        .selectable_label(self.settings_open, "⚙ Settings")
+                        .clicked()
+                    {
+                        self.settings_open = true;
+                    }
+                });
+            });
+
+        if self.settings_open {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.heading("Settings");
+                ui.add_space(8.0);
+                let changed = ui
+                    .checkbox(&mut self.show_continuity, "Show Continuity sources")
+                    .on_hover_text("List iPhone microphones (Continuity) as inputs.")
+                    .changed();
+                if changed {
+                    self.refresh(&ui.ctx().clone());
                 }
             });
+            return;
+        }
 
         egui::CentralPanel::default().show(ui, |ui| {
             let (mut delete, mut refresh) = (false, false);
@@ -422,11 +465,11 @@ fn app_tile(ui: &mut egui::Ui, list: &mut Vec<String>, a: &AppEntry, levels: Opt
         galley,
         text_color,
     );
-    if a.name.ends_with(" (helper)") {
+    if let Some(note) = a.note {
         painter.text(
             egui::pos2(rect.center().x, rect.top() + 66.0),
             egui::Align2::CENTER_TOP,
-            "helper",
+            note,
             egui::FontId::proportional(10.0),
             text_color.gamma_multiply(0.6),
         );
@@ -490,6 +533,17 @@ fn running_app(
 }
 
 /// Rasterize the app's icon to px×px premultiplied RGBA.
+/// iPhone microphones over Continuity (wired/wireless).
+fn is_continuity(transport: u32) -> bool {
+    matches!(&transport.to_be_bytes(), b"ccwd" | b"ccwl")
+}
+
+/// Inputs that live on another device: opening them for a meter would wake the iPhone
+/// (Continuity) or drop AirPods into low-quality call mode (Bluetooth).
+fn is_remote(transport: u32) -> bool {
+    is_continuity(transport) || matches!(&transport.to_be_bytes(), b"blue" | b"blea")
+}
+
 /// SF Symbol for a Core Audio transport type.
 fn transport_symbol(transport: u32) -> &'static str {
     match &transport.to_be_bytes() {
