@@ -156,7 +156,7 @@ fn header(w: &mut impl Write, channels: u16, rate: u32, data: u32) -> std::io::R
     w.write_all(&data.to_le_bytes())
 }
 
-/// `<dir>/<name> YYYY-MM-DD HH.MM.SS.wav`, local time. `~` expands to $HOME.
+/// `<dir>/YYYY-MM-DD-hh:mm:ss-<device-name>.wav`, local time; the name lowercased, spaces → `-`. `~` expands to $HOME.
 pub fn file_path(dir: &str, name: &str) -> PathBuf {
     let dir = match dir.strip_prefix("~") {
         Some(rest) => {
@@ -172,13 +172,13 @@ pub fn file_path(dir: &str, name: &str) -> PathBuf {
         libc::strftime(
             buf.as_mut_ptr().cast(),
             buf.len(),
-            c"%Y-%m-%d %H.%M.%S".as_ptr(),
+            c"%Y-%m-%d-%H:%M:%S".as_ptr(),
             &tm,
         )
     };
     let stamp = String::from_utf8_lossy(&buf[..len]);
-    let name = name.replace('/', "-");
-    dir.join(format!("{name} {stamp}.wav"))
+    let name = name.to_lowercase().replace(['/', ' '], "-");
+    dir.join(format!("{stamp}-{name}.wav"))
 }
 
 #[cfg(test)]
@@ -198,4 +198,15 @@ mod tests {
         assert_eq!(u32::from_le_bytes(b[40..44].try_into().unwrap()), 16);
         assert_eq!(f32::from_le_bytes(b[44..48].try_into().unwrap()), 0.5);
     }
+}
+
+#[test]
+fn file_name() {
+    let p = file_path("/tmp/r", "Record in Speakr");
+    let f = p.file_name().unwrap().to_str().unwrap();
+    assert!(
+        p.starts_with("/tmp/r") && f.ends_with("-record-in-speakr.wav"),
+        "{f}"
+    );
+    assert_eq!(f.len(), "YYYY-MM-DD-hh:mm:ss-record-in-speakr.wav".len());
 }
