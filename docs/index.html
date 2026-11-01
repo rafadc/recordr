@@ -92,9 +92,19 @@
     <li><b>Pick sources.</b> Click the app and input tiles you want, or check <b>All system audio</b>. Check <b>Mute sources on speakers</b> to stop hearing them. Selected apps that aren't running appear under <b>Closed apps</b> and are skipped; click one to remove it.</li>
     <li><b>Start it.</b> Click <b>▶ Start</b>. The device shows up as an input in every app.</li>
     <li><b>Use it.</b> In Zoom, OBS or your DAW, choose the device's name as the microphone.</li>
-    <li><b>Or record it.</b> Click <b>● Record</b> to save the device's audio as a WAV in <code>~/Music/recordr</code>. You can change the folder in Settings, and give each device a <b>Record shortcut</b> that works from any app. With the <b>Speakr</b> setting on, recordr offers to upload each recording to your Speakr server for transcription. While it records, the menu bar icon turns into a red dot.</li>
+    <li><b>Or record it.</b> Click <b>● Record</b> to save the device's audio as a WAV in <code>~/Music/recordr</code>. You can change the folder in Settings, and give each device a <b>Record shortcut</b> that works from any app. While it records, the menu bar icon turns into a red dot.</li>
   </ol>
   <p>The first time, macOS asks for <b>Audio Capture</b> and <b>Microphone</b> access. If a device is silent, check System Settings → Privacy &amp; Security → Screen &amp; System Audio Recording.</p>
+
+  <span class="eyebrow">Integration</span>
+  <h2>Send recordings to Speakr</h2>
+  <p><a href="https://github.com/murtaza-nasir/speakr">Speakr</a> is a self-hosted app that transcribes and summarizes recordings. recordr can hand each recording to it as soon as it stops.</p>
+  <ol class="steps">
+    <li><b>Get a token.</b> In Speakr, go to Account Settings → API Tokens and create one. The <b>Recorder</b> preset is enough.</li>
+    <li><b>Connect.</b> In recordr, open <b>⚙ Settings → Speakr</b>, turn it on, and enter your server URL and the token. The token is kept in your Keychain.</li>
+    <li><b>Record.</b> When a recording stops, recordr asks whether to upload it. You can cancel an upload while it runs.</li>
+  </ol>
+  <p>Check <b>Delete the local file after a successful upload</b> to avoid keeping two copies; recordr remembers the choice. The file is deleted only when the upload succeeds. If you skip, cancel, or the upload fails, it stays in your recordings folder.</p>
 
   <span class="eyebrow">Command line</span>
   <h2>From the terminal</h2>
