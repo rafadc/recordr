@@ -314,14 +314,6 @@ impl eframe::App for App {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.heading("Settings");
                 ui.add_space(8.0);
-                let changed = ui
-                    .checkbox(&mut self.show_continuity, "Show Continuity sources")
-                    .on_hover_text("List iPhone microphones (Continuity) as inputs.")
-                    .changed();
-                if changed {
-                    self.refresh(&ui.ctx().clone());
-                }
-                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label("Appearance");
                     let a = ui.selectable_value(&mut self.dark, false, "☀ Bright");
@@ -362,6 +354,14 @@ impl eframe::App for App {
                             }
                         };
                     });
+                }
+                ui.add_space(16.0);
+                let changed = ui
+                    .checkbox(&mut self.show_continuity, "Show Continuity sources")
+                    .on_hover_text("List iPhone microphones (Continuity) as inputs.")
+                    .changed();
+                if changed {
+                    self.refresh(&ui.ctx().clone());
                 }
             });
             return;
