@@ -156,7 +156,7 @@ fn header(w: &mut impl Write, channels: u16, rate: u32, data: u32) -> std::io::R
     w.write_all(&data.to_le_bytes())
 }
 
-/// `<dir>/YYYY-MM-DD-hh:mm:ss-<device-name>.wav`, local time; the name lowercased, spaces → `-`. `~` expands to $HOME.
+/// `<dir>/YYYY-MM-DD-hh.mm.ss-<device-name>.wav`, local time; the name lowercased, spaces → `-`. `~` expands to $HOME.
 pub fn file_path(dir: &str, name: &str) -> PathBuf {
     let dir = match dir.strip_prefix("~") {
         Some(rest) => {
@@ -172,7 +172,7 @@ pub fn file_path(dir: &str, name: &str) -> PathBuf {
         libc::strftime(
             buf.as_mut_ptr().cast(),
             buf.len(),
-            c"%Y-%m-%d-%H:%M:%S".as_ptr(),
+            c"%Y-%m-%d-%H.%M.%S".as_ptr(),
             &tm,
         )
     };
@@ -208,5 +208,5 @@ fn file_name() {
         p.starts_with("/tmp/r") && f.ends_with("-record-in-speakr.wav"),
         "{f}"
     );
-    assert_eq!(f.len(), "YYYY-MM-DD-hh:mm:ss-record-in-speakr.wav".len());
+    assert_eq!(f.len(), "YYYY-MM-DD-hh.mm.ss-record-in-speakr.wav".len());
 }
