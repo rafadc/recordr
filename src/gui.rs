@@ -445,6 +445,28 @@ impl eframe::App for App {
                             .show(ui, |ui| {
                                 app_grid(ui, "other", &mut d.args.apps, &other, meters);
                             });
+                        // Selected apps that aren't running: shown so they can be deselected.
+                        let closed: Vec<AppEntry> = d
+                            .args
+                            .apps
+                            .iter()
+                            .filter(|b| !apps.iter().any(|a| a.bundle == **b))
+                            .map(|b| AppEntry {
+                                bundle: b.clone(),
+                                name: b.rsplit('.').next().unwrap_or(b).to_string(),
+                                playing: false,
+                                icon: None,
+                                symbol: false,
+                                meter: None,
+                                note: Some("not running"),
+                            })
+                            .collect();
+                        if !closed.is_empty() {
+                            ui.add_space(8.0);
+                            ui.strong("Closed apps");
+                            let closed: Vec<&AppEntry> = closed.iter().collect();
+                            app_grid(ui, "closed", &mut d.args.apps, &closed, meters);
+                        }
                     });
                     ui.add_space(8.0);
                     ui.strong("Input devices (added as extra channels)");
