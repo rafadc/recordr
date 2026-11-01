@@ -36,7 +36,7 @@ Open recordr from Applications, Spotlight, or Raycast. The first time you open i
 
 Each tile shows live L/R level bars, so you can see what's making sound. The meters run while the window is visible, and macOS shows its recording indicators during that time. They stop when you minimize the window.
 
-Selected apps that aren't running show up under **Closed apps**. Click one to remove it from the device.
+Selected apps that aren't running show up under **Closed apps**, and **⚠ Not running** appears next to the Record button. They're skipped when the device starts. Click one to remove it from the device.
 
 Devices and their sources are saved. Devices that were running when you quit start again when recordr opens.
 
