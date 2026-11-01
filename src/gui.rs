@@ -73,8 +73,9 @@ impl Hotkeys {
         })
     }
 
-    /// Re-register when any device's shortcut changed. Returns the first error.
-    fn sync(&mut self, devices: &[Device]) -> Option<String> {
+    /// Re-register when any device's shortcut changed. Returns None if nothing changed,
+    /// else the outcome: the first error, or None if all registered.
+    fn sync(&mut self, devices: &[Device]) -> Option<Option<String>> {
         let wanted: Vec<&str> = devices.iter().map(|d| d.args.shortcut.as_str()).collect();
         if wanted.iter().eq(self.registered.iter().map(|(s, _)| s)) {
             return None;
@@ -103,7 +104,7 @@ impl Hotkeys {
             };
             self.registered.push((s.to_string(), h));
         }
-        error
+        Some(error)
     }
 
     /// Indices of devices whose shortcut was pressed since the last call.
@@ -137,6 +138,7 @@ struct App {
     quitting: bool,        // Quit from the menu bar: let the close through
     hotkeys: Option<Hotkeys>,
     capturing: Option<usize>, // device whose record shortcut is being typed
+    shortcut_error: Option<String>, // from the last shortcut registration
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -436,8 +438,8 @@ impl eframe::App for App {
     /// Runs every frame, and also while the window is hidden (unlike `ui`).
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(h) = &mut self.hotkeys {
-            if let Some(e) = h.sync(&self.devices) {
-                self.error = Some(e);
+            if let Some(result) = h.sync(&self.devices) {
+                self.shortcut_error = result;
             }
             for i in h.take_pressed() {
                 if let Some(Err(e)) = self
@@ -584,7 +586,7 @@ impl eframe::App for App {
             let (mut delete, mut refresh) = (false, false);
             let many = self.devices.len() > 1;
             let sel = self.selected;
-            let (apps, inputs, error, meters, installed, record_dir, capturing) = (
+            let (apps, inputs, error, meters, installed, record_dir, capturing, shortcut_error) = (
                 &self.apps,
                 &self.inputs,
                 &mut self.error,
@@ -592,6 +594,7 @@ impl eframe::App for App {
                 &self.installed,
                 &self.record_dir,
                 &mut self.capturing,
+                &self.shortcut_error,
             );
             let Some(d) = self.devices.get_mut(self.selected) else {
                 return;
@@ -682,8 +685,15 @@ impl eframe::App for App {
                             _ => None,
                         })
                     });
+                    use egui::Key::*;
                     match key {
-                        Some((egui::Key::Escape, _)) => *capturing = None,
+                        Some((Escape, _)) => *capturing = None,
+                        // Modifiers arrive as key presses too; wait for the real key.
+                        Some((
+                            ShiftLeft | ShiftRight | ControlLeft | ControlRight | AltLeft
+                            | AltRight | SuperLeft | SuperRight,
+                            _,
+                        )) => {}
                         // Require a modifier, so a plain letter isn't stolen from every app.
                         Some((key, m)) if m.mac_cmd || m.ctrl || m.alt => {
                             d.args.shortcut = shortcut_name(key, m);
@@ -704,12 +714,12 @@ impl eframe::App for App {
                     {
                         *capturing = Some(sel);
                     }
-                    if !d.args.shortcut.is_empty() && ui.small_button("✕").clicked() {
+                    if !d.args.shortcut.is_empty() && ui.small_button("Clear").clicked() {
                         d.args.shortcut.clear();
                     }
                 }
             });
-            if let Some(e) = error {
+            for e in [&*error, shortcut_error].into_iter().flatten() {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
             if live {
