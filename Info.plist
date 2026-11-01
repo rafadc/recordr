@@ -18,6 +18,8 @@
 	<string>14.2</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>recordr shows input levels and mixes microphones into virtual devices.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>recordr routes app audio into a virtual input device.</string>
 </dict>

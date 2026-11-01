@@ -9,6 +9,7 @@ eframe = { version = "0.37.0", features = ["persistence"] }
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSRunningApplication", "libc", "objc2-core-foundation", "std"] }
 objc2-core-audio = "0.3.2"
+objc2-core-audio-types = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-foundation = { version = "0.3.2", features = ["NSGeometry", "NSString"] }
 objc2-service-management = { version = "0.3.2", features = ["SMAppService"] }

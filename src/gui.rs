@@ -2,8 +2,10 @@
 // Device configs persist via eframe storage (~/Library/Application Support/recordr);
 // devices that were live at quit restart on launch, and the app registers itself as a login item.
 
-use crate::{Loopback, RunArgs, input_devices, processes};
+use crate::{Loopback, RunArgs, input_devices, meter::Meter, processes};
 use eframe::egui;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 struct Device {
     args: RunArgs,
@@ -18,6 +20,10 @@ struct App {
     inputs: Vec<AppEntry>, // bundle = device uid
     error: Option<String>,
     login_registered: bool,
+    // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
+    meters: HashMap<String, Option<Meter>>,
+    icons: HashMap<String, Option<egui::TextureHandle>>,
+    last_refresh: Option<Instant>,
 }
 
 struct AppEntry {
@@ -25,7 +31,8 @@ struct AppEntry {
     name: String,
     playing: bool,
     icon: Option<egui::TextureHandle>,
-    symbol: bool, // monochrome SF Symbol: tint with the text color
+    symbol: bool,          // monochrome SF Symbol: tint with the text color
+    meter: Option<String>, // key into App::meters; None = not metered
 }
 
 const KEY: &str = "devices";
@@ -86,26 +93,31 @@ impl App {
                 Some((app, helper)) => {
                     let name = app.localizedName().map(|n| n.to_string());
                     let name = name.map(|n| if helper { format!("{n} (helper)") } else { n });
-                    let icon = app
-                        .icon()
-                        .and_then(|i| icon_image(&i, 64))
-                        .map(|img| ctx.load_texture(&p.bundle, img, Default::default()));
+                    let icon = self
+                        .icons
+                        .entry(p.bundle.clone())
+                        .or_insert_with(|| {
+                            app.icon()
+                                .and_then(|i| icon_image(&i, 64))
+                                .map(|img| ctx.load_texture(&p.bundle, img, Default::default()))
+                        })
+                        .clone();
                     (name, icon)
                 }
                 None => (None, None),
             };
             apps.push(AppEntry {
                 name: name.unwrap_or_else(|| p.bundle.clone()),
+                meter: icon.is_some().then(|| format!("app:{}", p.bundle)),
                 bundle: p.bundle,
                 playing: p.playing,
                 icon,
                 symbol: false,
             });
         }
-        // Playing first, then third-party before Apple, named before raw bundle ids.
+        // Stable order (it refreshes every 2 s): third-party before Apple, named before raw ids.
         apps.sort_by_key(|a| {
             (
-                !a.playing,
                 a.bundle.starts_with("com.apple."),
                 a.name == a.bundle,
                 a.name.to_lowercase(),
@@ -116,14 +128,62 @@ impl App {
             .into_iter()
             .filter(|(uid, _, _)| !uid.starts_with("recordr."))
             .map(|(uid, name, transport)| AppEntry {
-                icon: symbol_image(transport_symbol(transport), 64)
-                    .map(|img| ctx.load_texture(&uid, img, Default::default())),
+                icon: self
+                    .icons
+                    .entry(uid.clone())
+                    .or_insert_with(|| {
+                        symbol_image(transport_symbol(transport), 64)
+                            .map(|img| ctx.load_texture(&uid, img, Default::default()))
+                    })
+                    .clone(),
+                meter: Some(format!("in:{uid}")),
                 bundle: uid,
                 name,
                 playing: false,
                 symbol: true,
             })
             .collect();
+        self.last_refresh = Some(Instant::now());
+        // Drop meters for things that vanished, and failed ones so they get retried.
+        let wanted: Vec<&String> = self
+            .apps
+            .iter()
+            .chain(&self.inputs)
+            .filter_map(|a| a.meter.as_ref())
+            .collect();
+        self.meters
+            .retain(|k, m| m.is_some() && wanted.contains(&k));
+    }
+
+    /// Meters run while the window is visible, focused or not. They keep taps and mics open
+    /// (macOS shows its recording indicators), so stop them when minimized or fully hidden.
+    fn update_meters(&mut self, ctx: &egui::Context) {
+        let hidden = ctx.input(|i| {
+            let v = i.viewport();
+            v.minimized.unwrap_or(false) || v.occluded.unwrap_or(false)
+        });
+        if hidden {
+            self.meters.clear();
+            return;
+        }
+        if self
+            .last_refresh
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(2))
+        {
+            self.refresh(ctx); // pick up apps that started or stopped playing
+        }
+        for a in self.apps.iter().chain(&self.inputs) {
+            let Some(key) = &a.meter else { continue };
+            self.meters.entry(key.clone()).or_insert_with(|| {
+                let m = if a.symbol {
+                    Meter::device(&a.bundle)
+                } else {
+                    Meter::app(&a.bundle)
+                };
+                m.map_err(|e| eprintln!("meter {key}: {e}")).ok()
+            });
+        }
+        ctx.request_repaint_after(Duration::from_millis(33));
     }
 
     fn add_device(&mut self) {
@@ -149,6 +209,7 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.update_meters(&ui.ctx().clone());
         egui::Panel::left("devices")
             .resizable(false)
             .exact_size(180.0)
@@ -172,7 +233,8 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             let (mut delete, mut refresh) = (false, false);
             let many = self.devices.len() > 1;
-            let (apps, inputs, error) = (&self.apps, &self.inputs, &mut self.error);
+            let (apps, inputs, error, meters) =
+                (&self.apps, &self.inputs, &mut self.error, &self.meters);
             let Some(d) = self.devices.get_mut(self.selected) else {
                 return;
             };
@@ -224,16 +286,16 @@ impl eframe::App for App {
                     ui.add_enabled_ui(!d.args.system, |ui| {
                         let (with_icon, other): (Vec<_>, Vec<_>) =
                             apps.iter().partition(|a| a.icon.is_some());
-                        app_grid(ui, "apps", &mut d.args.apps, &with_icon);
+                        app_grid(ui, "apps", &mut d.args.apps, &with_icon, meters);
                         egui::CollapsingHeader::new(format!("Other processes ({})", other.len()))
                             .show(ui, |ui| {
-                                app_grid(ui, "other", &mut d.args.apps, &other);
+                                app_grid(ui, "other", &mut d.args.apps, &other, meters);
                             });
                     });
                     ui.add_space(8.0);
                     ui.strong("Input devices (added as extra channels)");
                     let inputs: Vec<&AppEntry> = inputs.iter().collect();
-                    app_grid(ui, "inputs", &mut d.args.devices, &inputs);
+                    app_grid(ui, "inputs", &mut d.args.devices, &inputs, meters);
                 });
             });
             if delete {
@@ -259,15 +321,26 @@ fn register_login_item() -> bool {
         .is_ok()
 }
 
-const TILE: egui::Vec2 = egui::vec2(96.0, 80.0);
+const TILE: egui::Vec2 = egui::vec2(96.0, 96.0);
 
 /// Fixed-size tiles, as many columns as fit the width.
-fn app_grid(ui: &mut egui::Ui, id: &str, list: &mut Vec<String>, apps: &[&AppEntry]) {
+fn app_grid(
+    ui: &mut egui::Ui,
+    id: &str,
+    list: &mut Vec<String>,
+    apps: &[&AppEntry],
+    meters: &HashMap<String, Option<Meter>>,
+) {
     let gap = 6.0;
     let cols = (((ui.available_width() + gap) / (TILE.x + gap)) as usize).max(1);
     egui::Grid::new(id).spacing([gap, gap]).show(ui, |ui| {
         for (i, a) in apps.iter().enumerate() {
-            app_tile(ui, list, a);
+            let levels = a
+                .meter
+                .as_ref()
+                .and_then(|k| meters.get(k)?.as_ref())
+                .map(Meter::levels);
+            app_tile(ui, list, a, levels);
             if (i + 1) % cols == 0 {
                 ui.end_row();
             }
@@ -276,7 +349,7 @@ fn app_grid(ui: &mut egui::Ui, id: &str, list: &mut Vec<String>, apps: &[&AppEnt
 }
 
 /// One toggle tile: big icon on top, name below (one line, ellipsized), highlighted when on.
-fn app_tile(ui: &mut egui::Ui, list: &mut Vec<String>, a: &AppEntry) {
+fn app_tile(ui: &mut egui::Ui, list: &mut Vec<String>, a: &AppEntry, levels: Option<[f32; 2]>) {
     let on = list.iter().any(|x| *x == a.bundle);
     let (rect, resp) = ui.allocate_exact_size(TILE, egui::Sense::click());
     let resp = resp.on_hover_text(format!("{}\n{}", a.name, a.bundle));
@@ -299,7 +372,7 @@ fn app_tile(ui: &mut egui::Ui, list: &mut Vec<String>, a: &AppEntry) {
     painter.rect_filled(rect, 8.0, fill);
 
     let icon_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.center().x, rect.top() + 28.0),
+        egui::pos2(rect.center().x, rect.top() + 26.0),
         egui::vec2(40.0, 40.0),
     );
     match &a.icon {
@@ -345,18 +418,41 @@ fn app_tile(ui: &mut egui::Ui, list: &mut Vec<String>, a: &AppEntry) {
     job.halign = egui::Align::Center;
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     painter.galley(
-        egui::pos2(rect.center().x, rect.bottom() - 24.0),
+        egui::pos2(rect.center().x, rect.top() + 50.0),
         galley,
         text_color,
     );
     if a.name.ends_with(" (helper)") {
         painter.text(
-            egui::pos2(rect.center().x, rect.bottom() - 9.0),
-            egui::Align2::CENTER_BOTTOM,
+            egui::pos2(rect.center().x, rect.top() + 66.0),
+            egui::Align2::CENTER_TOP,
             "helper",
             egui::FontId::proportional(10.0),
             text_color.gamma_multiply(0.6),
         );
+    }
+    if let Some(levels) = levels {
+        meter_bars(&painter, rect, levels, text_color);
+    }
+}
+
+/// Two thin L/R bars along the tile's bottom edge: green, then yellow, red near 0 dB.
+fn meter_bars(painter: &egui::Painter, tile: egui::Rect, levels: [f32; 2], track: egui::Color32) {
+    for (i, level) in levels.into_iter().enumerate() {
+        let y = tile.bottom() - 14.0 + i as f32 * 6.0;
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(tile.left() + 10.0, y),
+            egui::vec2(TILE.x - 20.0, 4.0),
+        );
+        painter.rect_filled(bar, 2.0, track.gamma_multiply(0.15));
+        let color = match level {
+            l if l > 0.95 => egui::Color32::from_rgb(235, 70, 60),
+            l if l > 0.8 => egui::Color32::from_rgb(240, 200, 50),
+            _ => egui::Color32::from_rgb(70, 200, 100),
+        };
+        let mut lit = bar;
+        lit.set_width(bar.width() * level);
+        painter.rect_filled(lit, 2.0, color);
     }
 }
 

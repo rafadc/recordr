@@ -6,6 +6,7 @@
 // ponytail: taps over an AudioServerPlugIn driver; a driver only matters if you need <14.2 support.
 
 mod gui;
+mod meter;
 
 use std::{ffi::c_void, ptr::NonNull, sync::mpsc};
 
@@ -370,7 +371,7 @@ impl Loopback {
 
         // 2. Public aggregate device = tap + optional physical inputs (first --device is the clock).
         let subs = r.devices.clone();
-        let dict = aggregate_description(&r.name, &uid, &subs, tap_uid.as_deref());
+        let dict = aggregate_description(&r.name, &uid, &subs, tap_uid.as_deref(), false);
         let cf: &CFDictionary = unsafe { &*(Retained::as_ptr(&dict).cast()) }; // toll-free bridge
         let mut dev_id: AudioObjectID = 0;
         let st = unsafe { AudioHardwareCreateAggregateDevice(cf, NonNull::from(&mut dev_id)) };
@@ -389,6 +390,7 @@ fn aggregate_description(
     uid: &str,
     subdevices: &[String],
     tap_uid: Option<&str>,
+    private: bool,
 ) -> Retained<NSDictionary<NSString, objc2::runtime::AnyObject>> {
     use objc2::runtime::AnyObject;
     let s = |v: &str| -> Retained<AnyObject> { NSString::from_str(v).into() };
@@ -403,7 +405,7 @@ fn aggregate_description(
     let mut vals: Vec<Retained<AnyObject>> = vec![
         s(name),
         s(uid),
-        NSNumber::new_bool(false).into(), // public: other apps can see it
+        NSNumber::new_bool(private).into(), // public = other apps can pick it
         NSNumber::new_bool(false).into(),
     ];
     if let Some(main) = subdevices.first() {
