@@ -7,6 +7,7 @@
 
 mod gui;
 mod meter;
+mod record;
 
 use std::{ffi::c_void, ptr::NonNull, sync::mpsc};
 
