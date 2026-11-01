@@ -27,6 +27,7 @@ struct App {
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
+    installed: HashMap<String, Option<(String, egui::TextureHandle)>>, // closed apps: name + icon
     last_refresh: Option<Instant>,
 }
 
@@ -205,6 +206,14 @@ impl App {
                 symbol: true,
             })
             .collect();
+        // Selected apps that aren't running: look up their name and icon on disk, once.
+        for b in self.devices.iter().flat_map(|d| &d.args.apps) {
+            if !self.apps.iter().any(|a| a.bundle == *b) && !self.installed.contains_key(b) {
+                let found = installed_app(b)
+                    .map(|(name, img)| (name, ctx.load_texture(b, img, Default::default())));
+                self.installed.insert(b.clone(), found);
+            }
+        }
         self.perms = PERMS.map(|(_, service, _)| tcc_status(service));
         self.last_refresh = Some(Instant::now());
         // Drop meters for things that vanished, and failed ones so they get retried.
@@ -370,8 +379,13 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             let (mut delete, mut refresh) = (false, false);
             let many = self.devices.len() > 1;
-            let (apps, inputs, error, meters) =
-                (&self.apps, &self.inputs, &mut self.error, &self.meters);
+            let (apps, inputs, error, meters, installed) = (
+                &self.apps,
+                &self.inputs,
+                &mut self.error,
+                &self.meters,
+                &self.installed,
+            );
             let Some(d) = self.devices.get_mut(self.selected) else {
                 return;
             };
@@ -445,6 +459,34 @@ impl eframe::App for App {
                             .show(ui, |ui| {
                                 app_grid(ui, "other", &mut d.args.apps, &other, meters);
                             });
+                        // Selected apps that aren't running: shown so they can be deselected.
+                        let closed: Vec<AppEntry> = d
+                            .args
+                            .apps
+                            .iter()
+                            .filter(|b| !apps.iter().any(|a| a.bundle == **b))
+                            .map(|b| {
+                                let found = installed.get(b).cloned().flatten();
+                                AppEntry {
+                                    bundle: b.clone(),
+                                    name: found.as_ref().map_or_else(
+                                        || b.rsplit('.').next().unwrap_or(b).to_string(),
+                                        |(n, _)| n.clone(),
+                                    ),
+                                    playing: false,
+                                    icon: found.map(|(_, t)| t),
+                                    symbol: false,
+                                    meter: None,
+                                    note: Some("not running"),
+                                }
+                            })
+                            .collect();
+                        if !closed.is_empty() {
+                            ui.add_space(8.0);
+                            ui.strong("Closed apps");
+                            let closed: Vec<&AppEntry> = closed.iter().collect();
+                            app_grid(ui, "closed", &mut d.args.apps, &closed, meters);
+                        }
                     });
                     ui.add_space(8.0);
                     ui.strong("Input devices (added as extra channels)");
@@ -641,6 +683,23 @@ fn running_app(
         id = parent;
     }
     None
+}
+
+/// Name and icon of an installed app that isn't running. Helper ids fall back to the parent app.
+fn installed_app(bundle: &str) -> Option<(String, egui::ColorImage)> {
+    use objc2_foundation::NSString;
+    let ws = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let mut id = bundle;
+    let url = loop {
+        if let Some(u) = ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(id)) {
+            break u;
+        }
+        id = id.rsplit_once('.').filter(|(p, _)| p.contains('.'))?.0;
+    };
+    let path = url.path()?;
+    let name = url.lastPathComponent()?.to_string();
+    let name = name.trim_end_matches(".app").to_string();
+    Some((name, icon_image(&ws.iconForFile(&path), 64)?))
 }
 
 /// Rasterize the app's icon to px×px premultiplied RGBA.
