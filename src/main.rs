@@ -188,7 +188,8 @@ fn device_uids() -> Vec<(String, String)> {
 }
 
 /// Devices that can record (have at least one input stream): (uid, name).
-fn input_devices() -> Vec<(String, String)> {
+/// Input-capable devices as (uid, name, transport type fourcc).
+fn input_devices() -> Vec<(String, String, u32)> {
     get_ids(
         kAudioObjectSystemObject as u32,
         kAudioHardwarePropertyDevices,
@@ -217,6 +218,7 @@ fn input_devices() -> Vec<(String, String)> {
         (
             uid,
             get_string(d, kAudioObjectPropertyName).unwrap_or_default(),
+            get(d, kAudioDevicePropertyTransportType, None).unwrap_or(0),
         )
     })
     .collect()
