@@ -13,15 +13,15 @@ use std::{
 
 use eframe::egui;
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::AnyObject,
-    runtime::NSObject, sel,
+    AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::AnyObject, runtime::NSObject, sel,
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSColor, NSEventMask, NSEventModifierFlags,
     NSEventType, NSImage, NSImageSymbolConfiguration, NSMenu, NSMenuItem, NSStatusBar,
     NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::NSString;
+use objc2_foundation::{NSData, NSSize, NSString};
 
 static QUIT: AtomicBool = AtomicBool::new(false);
 static CTX: OnceLock<egui::Context> = OnceLock::new();
@@ -142,7 +142,8 @@ impl Tray {
         tray
     }
 
-    /// Waveform normally; a red record dot while any device records.
+    /// The app icon's loop (a template image, so it follows the menu bar's color);
+    /// a red record dot while any device records.
     pub fn set_recording(&mut self, on: bool) {
         if self.recording == Some(on) {
             return;
@@ -159,18 +160,19 @@ impl Tray {
 
 /// Waveform (template, follows the menu bar's color), or a red record dot.
 pub(crate) fn icon(on: bool) -> Option<Retained<NSImage>> {
-    let (symbol, label) = if on {
-        ("record.circle.fill", "recordr: recording")
-    } else {
-        ("waveform", "recordr")
-    };
-    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(symbol),
-        Some(&NSString::from_str(label)),
-    )?;
     if !on {
+        // The app icon's loop as a template image; NSImage reads SVG natively (macOS 14+).
+        let data = NSData::with_bytes(include_bytes!("../assets/menubar.svg"));
+        let image = NSImage::initWithData(NSImage::alloc(), &data)?;
+        image.setTemplate(true);
+        image.setSize(NSSize::new(18.0, 18.0));
+        image.setAccessibilityDescription(Some(&NSString::from_str("recordr")));
         return Some(image);
     }
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str("record.circle.fill"),
+        Some(&NSString::from_str("recordr: recording")),
+    )?;
     // The menu bar draws template images monochrome and ignores contentTintColor,
     // so bake the red into the symbol and opt out of templating.
     let red =

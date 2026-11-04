@@ -12,7 +12,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAp
 objc2-core-audio = "0.3.2"
 objc2-core-audio-types = "0.3.2"
 objc2-core-foundation = "0.3.2"
-objc2-foundation = { version = "0.3.2", features = ["NSGeometry", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", features = ["NSData", "NSGeometry", "NSString", "NSURL"] }
 objc2-service-management = { version = "0.3.2", features = ["SMAppService"] }
 serde = { version = "1.0.229", features = ["derive"] }
 global-hotkey = "0.9.0"
