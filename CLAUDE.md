@@ -34,6 +34,7 @@ Only the installed `.app` gets the TCC permissions (Audio Capture, Microphone), 
 Releases: every push to `main` runs `.github/workflows/nightly.yml`. It runs `RECORDR_SIGN=- ./bundle.sh --dmg` (ad-hoc signed; CI has no keychain identity) and replaces the `nightly` prerelease, tag included, with `target/recordr.dmg`.
 
 Regenerate the icon after editing `assets/icon.svg`: `assets/make-icon.sh` (writes `assets/AppIcon.icns`).
+`assets/menubar.svg` is the menu bar icon: the same loop, black on transparent, embedded with `include_bytes!` and loaded as a template image (NSImage reads SVG on macOS 14+). Keep the two in sync.
 
 ## Architecture
 
