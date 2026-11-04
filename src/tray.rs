@@ -56,7 +56,7 @@ define_class!(
                         item.setMenu(None);
                     }
                 });
-            } else if app.isActive() && !app.isHidden() {
+            } else if app.isActive() && app.windows().iter().any(|w| w.isVisible()) {
                 hide();
             } else {
                 show();
@@ -200,9 +200,17 @@ pub fn set_dock(visible: bool) {
 }
 
 /// Hide the whole app (like ⌘H): a Dock click or Open in the menu brings the window back.
+/// `hide:` does nothing for an Accessory app (menu bar only), so there the windows are ordered
+/// out instead. Not with a Dock icon: a Dock click unhides the app but wouldn't reorder them.
 pub fn hide() {
     let mtm = MainThreadMarker::new().expect("main thread");
-    NSApplication::sharedApplication(mtm).hide(None);
+    let app = NSApplication::sharedApplication(mtm);
+    app.hide(None);
+    if app.activationPolicy() == NSApplicationActivationPolicy::Accessory {
+        for w in app.windows() {
+            w.orderOut(None);
+        }
+    }
 }
 
 /// Bring the app to the front (needed in Accessory mode, where it isn't activated by the Dock).
