@@ -156,6 +156,8 @@ struct App {
     to_upload: Vec<std::path::PathBuf>, // finished recordings waiting for the Upload? dialog
     upload: Option<Upload>,
     upload_result: Option<String>, // shown until dismissed
+    silence_asked: bool,           // asked once for this silent stretch; reset when sound returns
+    silence_prompt: bool,          // the "Stop recording?" dialog is open
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
     meters: HashMap<String, Option<Meter>>,
     icons: HashMap<String, Option<egui::TextureHandle>>,
@@ -173,6 +175,7 @@ struct AppEntry {
     note: Option<&'static str>, // small grey subtitle under the name
 }
 
+const SILENCE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const KEY: &str = "devices";
 const RUNNING: &str = "running";
 const LOGIN: &str = "login_item_registered";
@@ -484,6 +487,54 @@ impl App {
         });
     }
 
+    /// Every recording silent for SILENCE_LIMIT: notify, show the window, and ask to stop.
+    /// Runs in `logic`, so it works while hidden.
+    fn check_silence(&mut self, ctx: &egui::Context) {
+        let recs: Vec<&Recorder> = self.devices.iter().filter_map(|d| d.rec.as_ref()).collect();
+        if recs.is_empty() || recs.iter().any(|r| r.silent_for() < SILENCE_LIMIT) {
+            self.silence_asked = false;
+            self.silence_prompt = false;
+        } else if !self.silence_asked {
+            self.silence_asked = true;
+            self.silence_prompt = true;
+            // ponytail: osascript banner (shown as Script Editor); UNUserNotificationCenter if it needs our name or buttons.
+            let _ = std::process::Command::new("osascript")
+                .args(["-e", "display notification \"There has been no sound for the last 10 minutes. Open recordr to stop the recording.\" with title \"recordr: still recording\""])
+                .spawn();
+            tray::show();
+        }
+        if !recs.is_empty() {
+            ctx.request_repaint_after(Duration::from_secs(10)); // keep checking while hidden
+        }
+    }
+
+    fn silence_dialog(&mut self, ctx: &egui::Context) {
+        if !self.silence_prompt {
+            return;
+        }
+        let (mut stop, mut keep) = (false, false);
+        egui::Modal::new(egui::Id::unique("silence")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading("Silence");
+            ui.add_space(4.0);
+            ui.label(
+                "There has been no sound for the last 10 minutes, on any device that is recording. \
+                 Do you want to stop the recording?",
+            );
+            ui.weak("If Speakr is on, you'll be asked whether to upload it next.");
+            ui.horizontal(|ui| {
+                stop = ui.button("Stop recording").clicked();
+                keep = ui.button("Keep recording").clicked();
+            });
+        });
+        if stop {
+            self.devices.iter_mut().for_each(Device::stop_recording);
+        }
+        if stop || keep {
+            self.silence_prompt = false;
+        }
+    }
+
     /// Upload? → Uploading… (Cancel) → result. One recording at a time.
     fn speakr_dialog(&mut self, ctx: &egui::Context) {
         let modal = |ctx: &egui::Context, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -582,6 +633,7 @@ impl eframe::App for App {
             }
         }
         self.collect_recordings(ctx);
+        self.check_silence(ctx);
         self.handle_window(ctx);
     }
 
@@ -603,6 +655,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.speakr_dialog(&ui.ctx().clone());
+        self.silence_dialog(&ui.ctx().clone());
         self.update_meters(&ui.ctx().clone());
         egui::Panel::left("devices")
             .resizable(false)
