@@ -176,6 +176,21 @@ struct AppEntry {
     note: Option<&'static str>, // small grey subtitle under the name
 }
 
+/// `m:ss`, or `h:mm:ss` from an hour on.
+fn clock(d: Duration) -> String {
+    let s = d.as_secs();
+    match s / 3600 {
+        0 => format!("{}:{:02}", s / 60, s % 60),
+        h => format!("{h}:{:02}:{:02}", s / 60 % 60, s % 60),
+    }
+}
+
+#[test]
+fn clock_format() {
+    assert_eq!(clock(Duration::from_secs(65)), "1:05");
+    assert_eq!(clock(Duration::from_secs(3725)), "1:02:05");
+}
+
 const SILENCE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const KEY: &str = "devices";
 const RUNNING: &str = "running";
@@ -866,17 +881,19 @@ impl eframe::App for App {
                     }
                 }
                 let recording = d.rec.is_some();
-                let label = if recording {
-                    "■ Stop recording"
-                } else {
-                    "● Record"
+                let label = match &d.rec {
+                    Some(r) => {
+                        ui.ctx().request_repaint_after(Duration::from_secs(1)); // tick the timer
+                        format!("■ Stop recording  {}", clock(r.elapsed()))
+                    }
+                    None => "● Record".into(),
                 };
                 let button =
                     egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
                         .fill(if recording { CINNABAR } else { TANGERINE });
                 if ui
                     .add(button)
-                    .on_hover_text("Save the device's audio as a WAV in the Settings folder.")
+                    .on_hover_text("Save the device's audio as an MP3 in the Settings folder.")
                     .clicked()
                 {
                     *error = d.toggle_record(record_dir).err();
