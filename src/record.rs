@@ -81,6 +81,11 @@ impl Recorder {
         Ok(r)
     }
 
+    /// Time since the recording started.
+    pub fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
     /// How long every source in this recording has been below SILENCE.
     pub fn silent_for(&self) -> Duration {
         let heard = Duration::from_secs(self.heard.load(Ordering::Relaxed));
