@@ -9,8 +9,13 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     ptr::NonNull,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{Sender, channel},
+    },
     thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 use objc2_core_audio::*;
@@ -24,7 +29,13 @@ pub struct Recorder {
     proc_id: AudioDeviceIOProcID,
     tx: Option<Box<Sender<Vec<f32>>>>, // boxed for a stable address handed to the IOProc
     writer: Option<JoinHandle<()>>,
+    started: Instant,
+    heard: Arc<AtomicU64>, // seconds since `started` of the last chunk above SILENCE
 }
+
+/// Peak below this (about -40 dBFS) counts as silence: digital zero from a quiet tap, or a mic's noise floor.
+// ponytail: fixed threshold; make it a setting if a noisy mic never reads as silent.
+const SILENCE: f32 = 0.01;
 
 impl Recorder {
     pub fn start(dev: AudioObjectID, path: PathBuf) -> Result<Self, String> {
@@ -35,7 +46,14 @@ impl Recorder {
         let rate = get::<f64>(dev, kAudioDevicePropertyNominalSampleRate, None).unwrap_or(48000.0);
         let (tx, rx) = channel();
         let shown = path.clone();
+        let (started, heard) = (Instant::now(), Arc::new(AtomicU64::new(0)));
+        let h = heard.clone();
         let writer = std::thread::spawn(move || {
+            let rx = rx.into_iter().inspect(|s: &Vec<f32>| {
+                if s.iter().any(|v| v.abs() > SILENCE) {
+                    h.store(started.elapsed().as_secs(), Ordering::Relaxed);
+                }
+            });
             if let Err(e) = write_mp3(file, rate as u32, rx) {
                 eprintln!("recording {}: {e}", shown.display());
             }
@@ -46,6 +64,8 @@ impl Recorder {
             proc_id: None,
             tx: Some(Box::new(tx)),
             writer: Some(writer),
+            started,
+            heard,
         };
         let data = (&**r.tx.as_ref().unwrap() as *const Sender<_>)
             .cast_mut()
@@ -59,6 +79,12 @@ impl Recorder {
         )?;
         check(unsafe { AudioDeviceStart(dev, r.proc_id) }, "record start")?;
         Ok(r)
+    }
+
+    /// How long every source in this recording has been below SILENCE.
+    pub fn silent_for(&self) -> Duration {
+        let heard = Duration::from_secs(self.heard.load(Ordering::Relaxed));
+        self.started.elapsed().saturating_sub(heard)
     }
 }
 
@@ -128,9 +154,8 @@ fn mix_stereo(streams: &[(usize, &[f32])]) -> Vec<f32> {
     out
 }
 
-/// Float32 WAV. The channel count comes from the first chunk; sizes are patched at the end.
 /// Encode stereo f32 frames to MP3 as they arrive.
-fn write_mp3(file: File, rate: u32, rx: Receiver<Vec<f32>>) -> Result<(), String> {
+fn write_mp3(file: File, rate: u32, rx: impl IntoIterator<Item = Vec<f32>>) -> Result<(), String> {
     use mp3lame_encoder::{Bitrate, Builder, FlushNoGap, InterleavedPcm, Quality};
     let err = |e: &dyn std::fmt::Debug| format!("{e:?}");
     let mut enc = Builder::new()
