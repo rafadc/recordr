@@ -156,6 +156,7 @@ struct App {
     to_upload: Vec<std::path::PathBuf>, // finished recordings waiting for the Upload? dialog
     upload: Option<Upload>,
     upload_result: Option<String>, // shown until dismissed
+    silence_alert: bool,           // setting: ask to stop after SILENCE_LIMIT of silence
     silence_asked: bool,           // asked once for this silent stretch; reset when sound returns
     silence_prompt: bool,          // the "Stop recording?" dialog is open
     // Live level meters keyed by AppEntry::meter; None = failed, retried on the next refresh.
@@ -180,6 +181,7 @@ const KEY: &str = "devices";
 const RUNNING: &str = "running";
 const LOGIN: &str = "login_item_registered";
 const SHOW_CONTINUITY: &str = "show_continuity";
+const SILENCE_ALERT: &str = "silence_alert";
 const DARK: &str = "dark";
 const RECORD_DIR: &str = "record_dir";
 const SHOW_IN: &str = "show_in";
@@ -275,6 +277,10 @@ pub fn run() -> Result<(), String> {
             .storage
             .and_then(|s| eframe::get_value(s, SHOW_CONTINUITY))
             .unwrap_or(false);
+        app.silence_alert = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, SILENCE_ALERT))
+            .unwrap_or(true);
         app.dark = cc
             .storage
             .and_then(|s| eframe::get_value(s, DARK))
@@ -491,7 +497,10 @@ impl App {
     /// Runs in `logic`, so it works while hidden.
     fn check_silence(&mut self, ctx: &egui::Context) {
         let recs: Vec<&Recorder> = self.devices.iter().filter_map(|d| d.rec.as_ref()).collect();
-        if recs.is_empty() || recs.iter().any(|r| r.silent_for() < SILENCE_LIMIT) {
+        if !self.silence_alert
+            || recs.is_empty()
+            || recs.iter().any(|r| r.silent_for() < SILENCE_LIMIT)
+        {
             self.silence_asked = false;
             self.silence_prompt = false;
         } else if !self.silence_asked {
@@ -503,7 +512,7 @@ impl App {
                 .spawn();
             tray::show();
         }
-        if !recs.is_empty() {
+        if self.silence_alert && !recs.is_empty() {
             ctx.request_repaint_after(Duration::from_secs(10)); // keep checking while hidden
         }
     }
@@ -644,6 +653,7 @@ impl eframe::App for App {
         eframe::set_value(storage, RUNNING, &running);
         eframe::set_value(storage, LOGIN, &self.login_registered);
         eframe::set_value(storage, SHOW_CONTINUITY, &self.show_continuity);
+        eframe::set_value(storage, SILENCE_ALERT, &self.silence_alert);
         eframe::set_value(storage, DARK, &self.dark);
         eframe::set_value(storage, RECORD_DIR, &self.record_dir);
         eframe::set_value(storage, SPEAKR, &self.speakr);
@@ -726,6 +736,11 @@ impl eframe::App for App {
                         let _ = std::process::Command::new("open").arg(dir).spawn();
                     }
                 });
+                ui.checkbox(
+                    &mut self.silence_alert,
+                    "Ask to stop after 10 minutes of silence",
+                )
+                .on_hover_text("Low background noise (below about -40 dB) counts as silence.");
                 ui.add_space(16.0);
                 ui.strong("Speakr");
                 ui.checkbox(
